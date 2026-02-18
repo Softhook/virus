@@ -45,6 +45,9 @@ let trees = [], particles = [], enemies = [];
 let infectedTiles = {}, level = 1, currentMaxEnemies = 2;
 let levelComplete = false, infectionStarted = false, levelEndTime = 0;
 let gameFont;
+let gameState = 'menu'; // 'menu' or 'playing'
+let numPlayers = 1;
+let menuStars = []; // animated starfield for menu
 
 // Each player object holds their own ship + projectiles + score
 let players = [];
@@ -162,18 +165,33 @@ function setup() {
   createCanvas(windowWidth, windowHeight, WEBGL);
   textFont(gameFont);
 
-  players = [
-    createPlayer(0, P1_KEYS, -100, [80, 180, 255]),   // P1 blue tint
-    createPlayer(1, P2_KEYS, 100, [255, 180, 80])      // P2 orange tint
-  ];
-
+  // Generate trees once (reused across games)
   randomSeed(42);
   for (let i = 0; i < 250; i++)
     trees.push({
       x: random(-5000, 5000), z: random(-5000, 5000),
       variant: floor(random(3)), trunkH: random(25, 50), canopyScale: random(1.0, 1.8)
     });
+
+  // Generate starfield for menu background
+  for (let i = 0; i < 120; i++)
+    menuStars.push({ x: random(-1, 1), y: random(-1, 1), s: random(1, 3), spd: random(0.3, 1.2) });
+
+  gameState = 'menu';
+}
+
+function startGame(np) {
+  numPlayers = np;
+  if (np === 1) {
+    players = [createPlayer(0, P1_KEYS, 0, [80, 180, 255])];
+  } else {
+    players = [
+      createPlayer(0, P1_KEYS, -100, [80, 180, 255]),
+      createPlayer(1, P2_KEYS, 100, [255, 180, 80])
+    ];
+  }
   startLevel(1);
+  gameState = 'playing';
 }
 
 function startLevel(lvl) {
@@ -200,7 +218,90 @@ function spawnEnemy() {
   });
 }
 
+// === MENU ===
+function drawMenu() {
+  let gl = drawingContext;
+  let pxD = pixelDensity();
+  gl.viewport(0, 0, width * pxD, height * pxD);
+
+  background(8, 12, 28);
+
+  push();
+  ortho(-width / 2, width / 2, -height / 2, height / 2, 0, 1000);
+  resetMatrix();
+
+  // Animated starfield
+  noStroke();
+  for (let st of menuStars) {
+    st.y += st.spd * 0.002;
+    if (st.y > 1) st.y -= 2;
+    let sx = st.x * width / 2;
+    let sy = st.y * height / 2;
+    let twinkle = 150 + sin(frameCount * 0.05 + st.x * 100) * 105;
+    fill(twinkle, twinkle, twinkle + 30, twinkle);
+    ellipse(sx, sy, st.s, st.s);
+  }
+
+  // Pulsing glow behind title
+  let glowPulse = sin(frameCount * 0.04) * 0.3 + 0.7;
+  noStroke();
+  fill(0, 255, 60, 18 * glowPulse);
+  ellipse(0, -height * 0.14, 500 * glowPulse, 140 * glowPulse);
+  fill(0, 255, 60, 10 * glowPulse);
+  ellipse(0, -height * 0.14, 700 * glowPulse, 200 * glowPulse);
+
+  // Title — "VIRUS"
+  textAlign(CENTER, CENTER);
+  noStroke();
+
+  // Shadow
+  fill(0, 180, 40, 80);
+  textSize(110);
+  text('V I R U S', 3, -height * 0.14 + 3);
+
+  // Main title
+  let titlePulse = sin(frameCount * 0.06) * 30;
+  fill(30 + titlePulse, 255, 60 + titlePulse);
+  textSize(110);
+  text('V I R U S', 0, -height * 0.14);
+
+  // Subtitle
+  textSize(16);
+  fill(140, 200, 140, 180);
+  text('A GAME OF INFECTION', 0, -height * 0.14 + 70);
+
+  // Scanline effect
+  for (let y = -height / 2; y < height / 2; y += 4) {
+    stroke(0, 0, 0, 20);
+    strokeWeight(1);
+    line(-width / 2, y, width / 2, y);
+  }
+  noStroke();
+
+  // Menu options
+  let optY = height * 0.08;
+  let blink1 = sin(frameCount * 0.08) * 0.3 + 0.7;
+  let blink2 = sin(frameCount * 0.08 + 1.5) * 0.3 + 0.7;
+
+  textSize(28);
+  fill(255, 255, 255, 255 * blink1);
+  text('PRESS 1 — SINGLE PLAYER', 0, optY);
+
+  fill(255, 255, 255, 255 * blink2);
+  text('PRESS 2 — MULTIPLAYER', 0, optY + 50);
+
+  // Controls hint
+  textSize(13);
+  fill(100, 140, 100, 150);
+  text('P1: WASD + R/F pitch  Q shoot  E missile', 0, height / 2 - 55);
+  text('P2: ARROWS + ;/\' pitch  . shoot  / missile', 0, height / 2 - 35);
+
+  pop();
+}
+
 function draw() {
+  if (gameState === 'menu') { drawMenu(); return; }
+
   let gl = drawingContext;
 
   // Shared world updates (once per frame)
@@ -213,86 +314,89 @@ function draw() {
   updateParticlePhysics();
   for (let p of players) updateProjectilePhysics(p);
 
-  // Draw split screen — left half for P1, right half for P2
-  let hw = floor(width / 2);
   let h = height;
   let pxDensity = pixelDensity();
 
-  for (let pi = 0; pi < 2; pi++) {
-    let p = players[pi];
-    let s = p.ship;
-    let xOff = pi * hw;
-
-    // Set the GL viewport and scissor for this player's half
-    gl.viewport(xOff * pxDensity, 0, hw * pxDensity, h * pxDensity);
+  if (numPlayers === 1) {
+    // === SINGLE PLAYER — full screen ===
+    let p = players[0], s = p.ship;
+    gl.viewport(0, 0, width * pxDensity, h * pxDensity);
     gl.enable(gl.SCISSOR_TEST);
-    gl.scissor(xOff * pxDensity, 0, hw * pxDensity, h * pxDensity);
-
-    // Clear just this half with the sky colour
+    gl.scissor(0, 0, width * pxDensity, h * pxDensity);
     gl.clearColor(30 / 255, 60 / 255, 120 / 255, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    // Begin a fresh 3D scene for this half
     push();
-    let fov = PI / 3;
-    let aspect = hw / h;
-    perspective(fov, aspect, 1, 15000);
-
-    // Camera follows this player's ship
-    let cd = 550;
-    let camY = min(s.y - 120, SEA - 60);
-    camera(
-      s.x + sin(s.yaw) * cd, camY, s.z + cos(s.yaw) * cd,
-      s.x, s.y, s.z,
-      0, 1, 0
-    );
+    perspective(PI / 3, width / h, 1, 15000);
+    let cd = 550, camY = min(s.y - 120, SEA - 60);
+    camera(s.x + sin(s.yaw) * cd, camY, s.z + cos(s.yaw) * cd, s.x, s.y, s.z, 0, 1, 0);
     directionalLight(240, 230, 210, 0.5, 0.8, -0.3);
     ambientLight(60, 60, 70);
-
-    drawLandscape(s);
-    drawSea(s);
-    drawTrees(s);
-    drawEnemies();
-
-    // Draw THIS player's ship
+    drawLandscape(s); drawSea(s); drawTrees(s); drawEnemies();
     if (!p.dead) shipDisplay(s, p.labelColor);
-
-    // Draw THE OTHER player's ship (as seen from this camera)
-    let other = players[1 - pi];
-    if (!other.dead) shipDisplay(other.ship, other.labelColor);
-
-    // Render particles and projectiles (already updated above)
-    renderParticles();
-    renderProjectiles(players[0]);
-    renderProjectiles(players[1]);
-
+    renderParticles(); renderProjectiles(p);
     pop();
 
-    // HUD overlay for this player
-    drawPlayerHUD(p, pi, hw, h);
-
+    drawPlayerHUD(p, 0, width, h);
     gl.disable(gl.SCISSOR_TEST);
-  }
 
-  // Reset viewport to full canvas for the divider line
-  let pxD = pixelDensity();
-  gl.viewport(0, 0, width * pxD, height * pxD);
-  push();
-  ortho(-width / 2, width / 2, -height / 2, height / 2, 0, 1000);
-  resetMatrix();
-  stroke(0, 255, 0, 180);
-  strokeWeight(2);
-  line(0, -height / 2, 0, height / 2);
+    // Level complete overlay
+    let pxD = pixelDensity();
+    gl.viewport(0, 0, width * pxD, height * pxD);
+    push();
+    ortho(-width / 2, width / 2, -height / 2, height / 2, 0, 1000);
+    resetMatrix();
+    if (levelComplete) {
+      noStroke(); fill(0, 255, 0); textAlign(CENTER, CENTER); textSize(40);
+      text("LEVEL " + level + " COMPLETE", 0, 0);
+    }
+    pop();
 
-  // Level complete text
-  if (levelComplete) {
-    noStroke();
-    fill(0, 255, 0);
-    textAlign(CENTER, CENTER);
-    textSize(40);
-    text("LEVEL " + level + " COMPLETE", 0, 0);
+  } else {
+    // === TWO PLAYER — split screen ===
+    let hw = floor(width / 2);
+
+    for (let pi = 0; pi < 2; pi++) {
+      let p = players[pi], s = p.ship;
+      let xOff = pi * hw;
+
+      gl.viewport(xOff * pxDensity, 0, hw * pxDensity, h * pxDensity);
+      gl.enable(gl.SCISSOR_TEST);
+      gl.scissor(xOff * pxDensity, 0, hw * pxDensity, h * pxDensity);
+      gl.clearColor(30 / 255, 60 / 255, 120 / 255, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+      push();
+      perspective(PI / 3, hw / h, 1, 15000);
+      let cd = 550, camY = min(s.y - 120, SEA - 60);
+      camera(s.x + sin(s.yaw) * cd, camY, s.z + cos(s.yaw) * cd, s.x, s.y, s.z, 0, 1, 0);
+      directionalLight(240, 230, 210, 0.5, 0.8, -0.3);
+      ambientLight(60, 60, 70);
+      drawLandscape(s); drawSea(s); drawTrees(s); drawEnemies();
+      if (!p.dead) shipDisplay(s, p.labelColor);
+      let other = players[1 - pi];
+      if (!other.dead) shipDisplay(other.ship, other.labelColor);
+      renderParticles(); renderProjectiles(players[0]); renderProjectiles(players[1]);
+      pop();
+
+      drawPlayerHUD(p, pi, hw, h);
+      gl.disable(gl.SCISSOR_TEST);
+    }
+
+    // Divider line + level complete
+    let pxD = pixelDensity();
+    gl.viewport(0, 0, width * pxD, height * pxD);
+    push();
+    ortho(-width / 2, width / 2, -height / 2, height / 2, 0, 1000);
+    resetMatrix();
+    stroke(0, 255, 0, 180); strokeWeight(2);
+    line(0, -height / 2, 0, height / 2);
+    if (levelComplete) {
+      noStroke(); fill(0, 255, 0); textAlign(CENTER, CENTER); textSize(40);
+      text("LEVEL " + level + " COMPLETE", 0, 0);
+    }
+    pop();
   }
-  pop();
 
   // Level logic
   let ic = Object.keys(infectedTiles).length;
@@ -306,7 +410,7 @@ function draw() {
       p.respawnTimer--;
       if (p.respawnTimer <= 0) {
         p.dead = false;
-        resetShip(p, p.id === 0 ? -100 : 100);
+        resetShip(p, numPlayers === 1 ? 0 : (p.id === 0 ? -100 : 100));
       }
     }
   }
@@ -614,7 +718,7 @@ function drawRadarForPlayer(p, hw, h) {
 
   // Other player
   let other = players[1 - p.id];
-  if (!other.dead) {
+  if (other && !other.dead) {
     let ox = (other.ship.x - s.x) * 0.012, oz = (other.ship.z - s.z) * 0.012;
     fill(other.labelColor[0], other.labelColor[1], other.labelColor[2], 200);
     noStroke();
@@ -834,6 +938,13 @@ function explosion(x, y, z) {
 }
 
 function keyPressed() {
+  // Menu key handling
+  if (gameState === 'menu') {
+    if (key === '1') startGame(1);
+    else if (key === '2') startGame(2);
+    return;
+  }
+
   // Missile launch (one-shot action, not continuous)
   for (let p of players) {
     if (keyCode === p.keys.missile && p.missilesRemaining > 0 && !p.dead) {
