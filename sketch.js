@@ -11,6 +11,8 @@ let trees = [];
 let particles = [];
 let bullets = [];
 let enemies = [];
+let homingMissiles = [];
+let missilesRemaining = 1;
 let score = 0;
 let gameFont;
 
@@ -72,6 +74,10 @@ function startLevel(lvl) {
 
   // Clear any remaining infection
   infectedTiles = {};
+
+  // Reset homing missiles
+  homingMissiles = [];
+  missilesRemaining = 1;
 }
 
 function spawnEnemy() {
@@ -200,14 +206,14 @@ function updateShip() {
     }
   }
 
-  if (keyIsDown(SHIFT) && frameCount % 6 === 0) {
+  if (keyIsDown(32) && frameCount % 6 === 0) { // SPACE bar fires bullets
     let bPower = 25;
     bullets.push({
       x: ship.x, y: ship.y, z: ship.z,
       vx: cos(ship.pitch) * -sin(ship.yaw) * bPower + ship.vx,
       vy: sin(ship.pitch) * bPower + ship.vy,
       vz: cos(ship.pitch) * -cos(ship.yaw) * bPower + ship.vz,
-      life: 100
+      life: 300
     });
   }
 
@@ -248,12 +254,31 @@ function drawRadar() {
     }
   }
 
+  // Launchpad indicator (yellow dot)
+  let lpCenterX = (400 - ship.x) * 0.015;
+  let lpCenterZ = (400 - ship.z) * 0.015;
+  if (abs(lpCenterX) < 75 && abs(lpCenterZ) < 75) {
+    fill(255, 255, 0, 150); noStroke();
+    rect(lpCenterX, lpCenterZ, 5, 5);
+  }
+
   fill(255, 0, 0); noStroke();
   enemies.forEach(e => {
     let rx = (e.x - ship.x) * 0.015;
     let rz = (e.z - ship.z) * 0.015;
     if (abs(rx) < 75 && abs(rz) < 75) {
       rect(rx, rz, 4, 4);
+    } else {
+      // Clamp to radar square edge
+      let angle = atan2(rz, rx);
+      let edgeX = constrain(rx, -74, 74);
+      let edgeZ = constrain(rz, -74, 74);
+      push();
+      translate(edgeX, edgeZ, 0);
+      rotateZ(angle);
+      fill(255, 0, 0, 180);
+      triangle(4, 0, -3, -3, -3, 3);
+      pop();
     }
   });
 
@@ -295,6 +320,10 @@ function drawScoreHUD() {
   fill(255, 100, 100);
   text('ENEMIES ' + enemies.length, -width / 2 + 20, -height / 2 + 96);
 
+  // Missile counter
+  fill(0, 200, 255);
+  text('MISSILES ' + missilesRemaining, -width / 2 + 20, -height / 2 + 120);
+
   if (levelComplete) {
     fill(0, 255, 0);
     textAlign(CENTER, CENTER);
@@ -330,6 +359,81 @@ function updateParticles() {
       // Bullet hit ground — check if it landed on an infected tile
       clearInfectionAt(b.x, b.z);
       bullets.splice(i, 1);
+    }
+  }
+
+  // Update homing missiles
+  for (let i = homingMissiles.length - 1; i >= 0; i--) {
+    let m = homingMissiles[i];
+    // Find nearest enemy
+    let closest = null;
+    let closestDist = Infinity;
+    for (let e of enemies) {
+      let d = dist(m.x, m.y, m.z, e.x, e.y, e.z);
+      if (d < closestDist) { closestDist = d; closest = e; }
+    }
+    let maxSpd = 10;
+    if (closest) {
+      // Strong pursuit guidance: blend velocity toward target direction
+      let dx = closest.x - m.x;
+      let dy = closest.y - m.y;
+      let dz = closest.z - m.z;
+      let mag = sqrt(dx * dx + dy * dy + dz * dz);
+      if (mag > 0) {
+        // Desired velocity: full speed toward target
+        let desVx = (dx / mag) * maxSpd;
+        let desVy = (dy / mag) * maxSpd;
+        let desVz = (dz / mag) * maxSpd;
+        // Blend current velocity toward desired (12% per frame = aggressive homing)
+        let blend = 0.12;
+        m.vx = lerp(m.vx, desVx, blend);
+        m.vy = lerp(m.vy, desVy, blend);
+        m.vz = lerp(m.vz, desVz, blend);
+      }
+    }
+    // Ensure constant speed
+    let spd = sqrt(m.vx * m.vx + m.vy * m.vy + m.vz * m.vz);
+    if (spd > 0) {
+      m.vx = (m.vx / spd) * maxSpd;
+      m.vy = (m.vy / spd) * maxSpd;
+      m.vz = (m.vz / spd) * maxSpd;
+    }
+    m.x += m.vx; m.y += m.vy; m.z += m.vz;
+    m.life -= 1;
+
+    // Render missile with trail
+    push();
+    translate(m.x, m.y, m.z);
+    noStroke();
+    fill(0, 200, 255);
+    sphere(5);
+    pop();
+    // Smoke trail
+    if (frameCount % 2 === 0) {
+      particles.push({
+        x: m.x, y: m.y, z: m.z,
+        vx: random(-0.5, 0.5), vy: random(-0.5, 0.5), vz: random(-0.5, 0.5),
+        life: 120
+      });
+    }
+
+    // Check missile-enemy collision
+    let hit = false;
+    for (let j = enemies.length - 1; j >= 0; j--) {
+      if (dist(m.x, m.y, m.z, enemies[j].x, enemies[j].y, enemies[j].z) < 100) {
+        explosion(enemies[j].x, enemies[j].y, enemies[j].z);
+        enemies.splice(j, 1);
+        score += 250;
+        hit = true;
+        break;
+      }
+    }
+    if (hit || m.life <= 0 || m.y > getAltitude(m.x, m.z)) {
+      if (!hit && m.y > getAltitude(m.x, m.z)) {
+        explosion(m.x, m.y, m.z);
+        clearInfectionAt(m.x, m.z);
+      }
+      homingMissiles.splice(i, 1);
     }
   }
 }
@@ -730,12 +834,26 @@ function updateEnemies() {
 }
 
 function explosion(x, y, z) {
-  for (let i = 0; i < 20; i++) particles.push({ x: x, y: y, z: z, vx: random(-5, 5), vy: random(-5, 5), vz: random(-5, 5), life: 200 });
+  for (let i = 0; i < 40; i++) particles.push({ x: x, y: y, z: z, vx: random(-8, 8), vy: random(-8, 8), vz: random(-8, 8), life: 255 });
 }
 
 function resetGame() {
   ship.x = 400; ship.z = 400; ship.y = LAUNCHPAD_ALTITUDE - 20;
   ship.vx = ship.vy = ship.vz = 0;
+}
+
+function keyPressed() {
+  if (keyCode === SHIFT && missilesRemaining > 0 && document.pointerLockElement) {
+    missilesRemaining--;
+    let mPower = 8;
+    homingMissiles.push({
+      x: ship.x, y: ship.y, z: ship.z,
+      vx: cos(ship.pitch) * -sin(ship.yaw) * mPower + ship.vx,
+      vy: sin(ship.pitch) * mPower + ship.vy,
+      vz: cos(ship.pitch) * -cos(ship.yaw) * mPower + ship.vz,
+      life: 300
+    });
+  }
 }
 
 function mousePressed() {
