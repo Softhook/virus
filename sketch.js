@@ -1,5 +1,10 @@
 // === CONSTANTS ===
-const TILE = 120, SEA = 200, LAUNCH_ALT = 100, GRAV = 0.09, VIEW = 28;
+const TILE = 120, SEA = 200, LAUNCH_ALT = 100, GRAV = 0.09;
+// View rings: near = always drawn, outer = frustum culled (all at full tile detail)
+const VIEW_NEAR = 20, VIEW_FAR = 45;
+// Fog (linear): fades terrain into sky colour
+const FOG_START = 2000, FOG_END = 5000;
+const SKY_R = 30, SKY_G = 60, SKY_B = 120;
 const ORTHO_DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const MAX_INF = 1600, INF_RATE = 0.01, CLEAR_R = 3;
 const LAUNCH_MIN = 0, LAUNCH_MAX = 800;
@@ -59,6 +64,22 @@ const tileKey = (tx, tz) => tx + ',' + tz;
 const toTile = v => Math.floor(v / TILE);
 const isLaunchpad = (x, z) => x >= LAUNCH_MIN && x < LAUNCH_MAX && z >= LAUNCH_MIN && z < LAUNCH_MAX;
 const aboveSea = y => y >= SEA - 1;
+
+// Frustum cull: is tile roughly in front of camera?
+function inFrustum(sx, sz, tx, tz, yaw) {
+  let dx = tx - sx, dz = tz - sz;
+  let fwdX = -sin(yaw), fwdZ = -cos(yaw);
+  let fwd = fwdX * dx + fwdZ * dz;
+  if (fwd < -TILE * 3) return false;
+  let perp = abs(-fwdZ * dx + fwdX * dz);
+  return perp < fwd * 1.8 + TILE * 6;
+}
+
+// Distance fog: blend colour toward sky
+function fogBlend(r, g, b, d) {
+  let f = constrain((d - FOG_START) / (FOG_END - FOG_START), 0, 1);
+  return [lerp(r, SKY_R, f), lerp(g, SKY_G, f), lerp(b, SKY_B, f)];
+}
 
 function shipDir(s) {
   let cp = cos(s.pitch), sp = sin(s.pitch), sy = sin(s.yaw), cy = cos(s.yaw);
@@ -327,14 +348,14 @@ function draw() {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     push();
-    perspective(PI / 3, width / h, 1, 15000);
+    perspective(PI / 3, width / h, 50, VIEW_FAR * TILE * 1.5);
     let cd = 550, camY = min(s.y - 120, SEA - 60);
     camera(s.x + sin(s.yaw) * cd, camY, s.z + cos(s.yaw) * cd, s.x, s.y, s.z, 0, 1, 0);
     directionalLight(240, 230, 210, 0.5, 0.8, -0.3);
     ambientLight(60, 60, 70);
-    drawLandscape(s); drawSea(s); drawTrees(s); drawEnemies();
+    drawLandscape(s); drawSea(s); drawTrees(s); drawEnemies(s.x, s.z);
     if (!p.dead) shipDisplay(s, p.labelColor);
-    renderParticles(); renderProjectiles(p);
+    renderParticles(s.x, s.z); renderProjectiles(p, s.x, s.z);
     pop();
 
     drawPlayerHUD(p, 0, width, h);
@@ -367,16 +388,16 @@ function draw() {
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
       push();
-      perspective(PI / 3, hw / h, 1, 15000);
+      perspective(PI / 3, hw / h, 50, VIEW_FAR * TILE * 1.5);
       let cd = 550, camY = min(s.y - 120, SEA - 60);
       camera(s.x + sin(s.yaw) * cd, camY, s.z + cos(s.yaw) * cd, s.x, s.y, s.z, 0, 1, 0);
       directionalLight(240, 230, 210, 0.5, 0.8, -0.3);
       ambientLight(60, 60, 70);
-      drawLandscape(s); drawSea(s); drawTrees(s); drawEnemies();
+      drawLandscape(s); drawSea(s); drawTrees(s); drawEnemies(s.x, s.z);
       if (!p.dead) shipDisplay(s, p.labelColor);
       let other = players[1 - pi];
       if (!other.dead) shipDisplay(other.ship, other.labelColor);
-      renderParticles(); renderProjectiles(players[0]); renderProjectiles(players[1]);
+      renderParticles(s.x, s.z); renderProjectiles(players[0], s.x, s.z); renderProjectiles(players[1], s.x, s.z);
       pop();
 
       drawPlayerHUD(p, pi, hw, h);
@@ -601,16 +622,22 @@ function updateProjectilePhysics(p) {
   }
 }
 
-// Rendering: run once per viewport
-function renderParticles() {
+// Rendering: run once per viewport (with distance culling)
+function renderParticles(camX, camZ) {
+  let cullSq = (FOG_END * 0.6) * (FOG_END * 0.6);
   for (let p of particles) {
+    let dx = p.x - camX, dz = p.z - camZ;
+    if (dx * dx + dz * dz > cullSq) continue;
     push(); translate(p.x, p.y, p.z); noStroke(); fill(255, 150, 0, p.life); sphere(2); pop();
   }
 }
 
-function renderProjectiles(p) {
+function renderProjectiles(p, camX, camZ) {
+  let cullSq = (FOG_END * 0.8) * (FOG_END * 0.8);
   // Bullets
   for (let b of p.bullets) {
+    let dx = b.x - camX, dz = b.z - camZ;
+    if (dx * dx + dz * dz > cullSq) continue;
     push(); translate(b.x, b.y, b.z); noStroke();
     fill(p.labelColor[0], p.labelColor[1], p.labelColor[2]);
     sphere(3); pop();
@@ -618,6 +645,8 @@ function renderProjectiles(p) {
 
   // Homing missiles
   for (let m of p.homingMissiles) {
+    let dx = m.x - camX, dz = m.z - camZ;
+    if (dx * dx + dz * dz > cullSq) continue;
     push(); translate(m.x, m.y, m.z); noStroke(); fill(0, 200, 255); sphere(5); pop();
   }
 }
@@ -754,42 +783,77 @@ function drawLandscape(s) {
   let gx = toTile(s.x), gz = toTile(s.z);
   noStroke();
 
-  let batches = { gl: [], gd: [], ll: [], ld: [] };
   let infected = [];
+  // Fog-aware batch: stores [verts, r, g, b] entries
+  let fogBatch = [];
+  let launchBatch = { l: [], d: [] };
 
-  for (let tz = gz - VIEW; tz < gz + VIEW; tz++) {
-    for (let tx = gx - VIEW; tx <= gx + VIEW; tx++) {
-      let xP = tx * TILE, zP = tz * TILE, xP1 = xP + TILE, zP1 = zP + TILE;
-      let y00 = getAltitude(xP, zP), y10 = getAltitude(xP1, zP);
-      let y01 = getAltitude(xP, zP1), y11 = getAltitude(xP1, zP1);
-      let avgY = (y00 + y10 + y01 + y11) / 4;
-      if (aboveSea(avgY)) continue;
+  // Helper: add a single tile to the render lists
+  function addTile(tx, tz) {
+    let xP = tx * TILE, zP = tz * TILE;
+    let xP1 = xP + TILE, zP1 = zP + TILE;
+    let y00 = getAltitude(xP, zP), y10 = getAltitude(xP1, zP);
+    let y01 = getAltitude(xP, zP1), y11 = getAltitude(xP1, zP1);
+    let avgY = (y00 + y10 + y01 + y11) / 4;
+    if (aboveSea(avgY)) return;
 
-      let chk = (tx + tz) % 2 === 0;
-      let v = [xP, y00, zP, xP1, y10, zP, xP, y01, zP1, xP1, y10, zP, xP1, y11, zP1, xP, y01, zP1];
+    let v = [xP, y00, zP, xP1, y10, zP, xP, y01, zP1, xP1, y10, zP, xP1, y11, zP1, xP, y01, zP1];
+    let d = dist(s.x, s.z, (xP + xP1) / 2, (zP + zP1) / 2);
+    let chk = (tx + tz) % 2 === 0;
 
-      if (isLaunchpad(xP, zP)) {
-        (chk ? batches.ll : batches.ld).push(v);
-      } else if (infectedTiles[tileKey(tx, tz)]) {
-        let pulse = sin(frameCount * 0.08 + tx * 0.5 + tz * 0.3) * 0.5 + 0.5;
-        let af = map(avgY, -100, SEA, 1.15, 0.65);
-        let base = chk ? [160, 255, 10, 40, 10, 25] : [120, 200, 5, 25, 5, 15];
-        infected.push({
-          v,
-          r: lerp(base[0], base[1], pulse) * af,
-          g: lerp(base[2], base[3], pulse) * af,
-          b: lerp(base[4], base[5], pulse) * af
-        });
-      } else {
-        (chk ? batches.gl : batches.gd).push(v);
-      }
+    // Launchpad
+    if (isLaunchpad(xP, zP)) {
+      let [lr, lg, lb] = fogBlend(chk ? 125 : 110, chk ? 125 : 110, chk ? 120 : 105, d);
+      fogBatch.push({ v, r: lr, g: lg, b: lb });
+      return;
+    }
+
+    // Infection
+    if (infectedTiles[tileKey(tx, tz)]) {
+      let pulse = sin(frameCount * 0.08 + tx * 0.5 + tz * 0.3) * 0.5 + 0.5;
+      let af = map(avgY, -100, SEA, 1.15, 0.65);
+      let base = chk ? [160, 255, 10, 40, 10, 25] : [120, 200, 5, 25, 5, 15];
+      let ir = lerp(base[0], base[1], pulse) * af;
+      let ig = lerp(base[2], base[3], pulse) * af;
+      let ib = lerp(base[4], base[5], pulse) * af;
+      let [fr, fg, fb] = fogBlend(ir, ig, ib, d);
+      infected.push({ v, r: fr, g: fg, b: fb });
+      return;
+    }
+
+    // Normal terrain with fog — reduce checker contrast with distance to prevent shimmer
+    let checkerFade = constrain((d - FOG_START * 0.5) / (FOG_END * 0.4), 0, 1);
+    let gL = lerp(62, 50, checkerFade), gD = lerp(38, 50, checkerFade);
+    let gLg = lerp(170, 145, checkerFade), gDg = lerp(120, 145, checkerFade);
+    let [r, g, b] = fogBlend(chk ? gL : gD, chk ? gLg : gDg, chk ? gL : gD, d);
+    fogBatch.push({ v, r, g, b });
+  }
+
+  // === Near ring: full detail, no frustum cull (always visible) ===
+  for (let tz = gz - VIEW_NEAR; tz < gz + VIEW_NEAR; tz++)
+    for (let tx = gx - VIEW_NEAR; tx <= gx + VIEW_NEAR; tx++)
+      addTile(tx, tz);
+
+  // === Outer ring: full detail, frustum culled ===
+  for (let tz = gz - VIEW_FAR; tz < gz + VIEW_FAR; tz++) {
+    for (let tx = gx - VIEW_FAR; tx <= gx + VIEW_FAR; tx++) {
+      // Skip tiles already drawn in near ring
+      if (tx >= gx - VIEW_NEAR && tx < gx + VIEW_NEAR && tz >= gz - VIEW_NEAR && tz < gz + VIEW_NEAR) continue;
+      let cx = tx * TILE + TILE / 2, cz = tz * TILE + TILE / 2;
+      if (!inFrustum(s.x, s.z, cx, cz, s.yaw)) continue;
+      addTile(tx, tz);
     }
   }
 
-  drawBatch(batches.gl, 62, 170, 62);
-  drawBatch(batches.gd, 38, 120, 38);
-  drawBatch(batches.ll, 125, 125, 120);
-  drawBatch(batches.ld, 110, 110, 105);
+  // Draw all fogged terrain tiles
+  for (let t of fogBatch) {
+    fill(t.r, t.g, t.b);
+    beginShape(TRIANGLES);
+    let v = t.v;
+    vertex(v[0], v[1], v[2]); vertex(v[3], v[4], v[5]); vertex(v[6], v[7], v[8]);
+    vertex(v[9], v[10], v[11]); vertex(v[12], v[13], v[14]); vertex(v[15], v[16], v[17]);
+    endShape();
+  }
 
   // Solid launchpad base
   push();
@@ -806,6 +870,7 @@ function drawLandscape(s) {
   box(padW, padH, padW);
   pop();
 
+  // Draw infected tiles
   for (let inf of infected) {
     fill(inf.r, inf.g, inf.b);
     beginShape(TRIANGLES);
@@ -819,41 +884,54 @@ function drawLandscape(s) {
 function drawSea(s) {
   noStroke();
   let p = sin(frameCount * 0.03) * 8;
+  // Fog-blend the sea colour at the edges
   fill(15, 45 + p, 150 + p);
-  push(); translate(s.x, SEA, s.z); box(VIEW * TILE * 2, 2, VIEW * TILE * 2); pop();
+  let seaSize = VIEW_FAR * TILE * 2;
+  push(); translate(s.x, SEA + 3, s.z); box(seaSize, 2, seaSize); pop();
 }
 
 function drawTrees(s) {
-  let cullSq = 2500 * 2500;
+  let treeCullDist = VIEW_FAR * TILE;
+  let cullSq = treeCullDist * treeCullDist;
   for (let t of trees) {
     let dx = s.x - t.x, dz = s.z - t.z;
-    if (dx * dx + dz * dz >= cullSq) continue;
+    let dSq = dx * dx + dz * dz;
+    if (dSq >= cullSq) continue;
+    // Frustum cull trees
+    if (!inFrustum(s.x, s.z, t.x, t.z, s.yaw)) continue;
     let y = getAltitude(t.x, t.z);
     if (aboveSea(y) || isLaunchpad(t.x, t.z)) continue;
 
+    let d = sqrt(dSq);
     push(); translate(t.x, y, t.z); noStroke();
     let { trunkH: h, canopyScale: sc, variant: vi } = t;
     let inf = !!infectedTiles[tileKey(toTile(t.x), toTile(t.z))];
 
-    // Trunk
-    fill(inf ? color(80, 40, 20) : color(100, 65, 25));
+    // Trunk with fog
+    let [tr, tg, tb] = fogBlend(inf ? 80 : 100, inf ? 40 : 65, inf ? 20 : 25, d);
+    fill(tr, tg, tb);
     push(); translate(0, -h / 2, 0); box(5, h, 5); pop();
 
-    // Canopy
+    // Canopy with fog
     let tv = TREE_VARIANTS[vi];
     let c1 = inf ? tv.infected : tv.healthy;
-    fill(color(...c1));
+    let [cr, cg, cb] = fogBlend(c1[0], c1[1], c1[2], d);
+    fill(cr, cg, cb);
     let cn = tv.cones[0];
     push(); translate(0, -h - cn[2] * sc, 0); cone(cn[0] * sc, cn[1] * sc); pop();
 
     if (tv.cones2) {
-      fill(color(...(inf ? tv.infected2 : tv.healthy2)));
+      let c2 = inf ? tv.infected2 : tv.healthy2;
+      let [cr2, cg2, cb2] = fogBlend(c2[0], c2[1], c2[2], d);
+      fill(cr2, cg2, cb2);
       let cn2 = tv.cones2[0];
       push(); translate(0, -h - cn2[2] * sc, 0); cone(cn2[0] * sc, cn2[1] * sc); pop();
     }
 
-    // Shadow
-    push(); translate(0, -0.5, 8); rotateX(PI / 2); fill(0, 0, 0, 40); ellipse(0, 0, 20 * sc, 12 * sc); pop();
+    // Shadow (only close trees)
+    if (d < 1500) {
+      push(); translate(0, -0.5, 8); rotateX(PI / 2); fill(0, 0, 0, 40); ellipse(0, 0, 20 * sc, 12 * sc); pop();
+    }
     pop();
   }
 }
@@ -886,8 +964,12 @@ function shipDisplay(s, tintColor) {
 }
 
 // === ENEMIES ===
-function drawEnemies() {
+function drawEnemies(camX, camZ) {
+  let cullSq = FOG_END * FOG_END;
   for (let e of enemies) {
+    let dx = e.x - camX, dz = e.z - camZ;
+    if (dx * dx + dz * dz > cullSq) continue;
+
     push(); translate(e.x, e.y, e.z); rotateY(frameCount * 0.15); noStroke();
 
     for (let [yOff, col] of [[-10, [220, 30, 30]], [6, [170, 15, 15]]]) {
