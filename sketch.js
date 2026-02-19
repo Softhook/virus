@@ -1,7 +1,7 @@
 // === CONSTANTS ===
 const TILE = 120, SEA = 200, LAUNCH_ALT = 100, GRAV = 0.09;
 // View rings: near = always drawn, outer = frustum culled (all at full tile detail)
-const VIEW_NEAR = 20, VIEW_FAR = 60;
+const VIEW_NEAR = 20, VIEW_FAR = 30;
 // Fog (linear): fades terrain into sky colour
 const FOG_START = 1500, FOG_END = 3000;
 const SKY_R = 30, SKY_G = 60, SKY_B = 120;
@@ -56,6 +56,7 @@ let menuStars = []; // animated starfield for menu
 
 // Each player object holds their own ship + projectiles + score
 let players = [];
+let altCache = new Map();
 
 
 
@@ -66,14 +67,14 @@ const isLaunchpad = (x, z) => x >= LAUNCH_MIN && x < LAUNCH_MAX && z >= LAUNCH_M
 const aboveSea = y => y >= SEA - 1;
 
 // Frustum cull: is tile roughly in front of camera?
-function inFrustum(sx, sz, tx, tz, yaw) {
+function inFrustum(sx, sz, tx, tz, fwdX, fwdZ) {
   let dx = tx - sx, dz = tz - sz;
-  let fwdX = -sin(yaw), fwdZ = -cos(yaw);
   let fwd = fwdX * dx + fwdZ * dz;
   if (fwd < -TILE * 3) return false;
   let perp = abs(-fwdZ * dx + fwdX * dz);
   return perp < fwd * 1.8 + TILE * 6;
 }
+
 
 // Distance fog: blend colour toward sky
 function fogBlend(r, g, b, d) {
@@ -322,6 +323,8 @@ function drawMenu() {
 
 function draw() {
   if (gameState === 'menu') { drawMenu(); return; }
+
+  altCache.clear();
 
   let gl = drawingContext;
 
@@ -628,7 +631,7 @@ function renderParticles(camX, camZ) {
   for (let p of particles) {
     let dx = p.x - camX, dz = p.z - camZ;
     if (dx * dx + dz * dz > cullSq) continue;
-    push(); translate(p.x, p.y, p.z); noStroke(); fill(255, 150, 0, p.life); sphere(2); pop();
+    push(); translate(p.x, p.y, p.z); noStroke(); fill(255, 150, 0, p.life); box(4); pop();
   }
 }
 
@@ -640,14 +643,14 @@ function renderProjectiles(p, camX, camZ) {
     if (dx * dx + dz * dz > cullSq) continue;
     push(); translate(b.x, b.y, b.z); noStroke();
     fill(p.labelColor[0], p.labelColor[1], p.labelColor[2]);
-    sphere(3); pop();
+    box(6); pop();
   }
 
   // Homing missiles
   for (let m of p.homingMissiles) {
     let dx = m.x - camX, dz = m.z - camZ;
     if (dx * dx + dz * dz > cullSq) continue;
-    push(); translate(m.x, m.y, m.z); noStroke(); fill(0, 200, 255); sphere(5); pop();
+    push(); translate(m.x, m.y, m.z); noStroke(); fill(0, 200, 255); box(10); pop();
   }
 }
 
@@ -773,10 +776,37 @@ function drawControlHints(p, pi, hw, h) {
 }
 
 // === WORLD ===
+// Multi-sine terrain: irrational frequency ratios ensure non-repetition
 function getAltitude(x, z) {
   if (isLaunchpad(x, z)) return LAUNCH_ALT;
+
+  let isGrid = (x % TILE === 0 && z % TILE === 0);
+  let key;
+  if (isGrid) {
+    let tx = x / TILE, tz = z / TILE;
+    key = (tx & 0xFFFF) | ((tz & 0xFFFF) << 16);
+    let cached = altCache.get(key);
+    if (cached !== undefined) return cached;
+  }
+
   let xs = x * 0.001, zs = z * 0.001;
-  return 250 - (2 * sin(xs - 2 * zs) + 2 * sin(4 * xs + 3 * zs) + 2 * sin(3 * zs - 5 * xs)) * 60;
+
+  // Large-scale structural "bones" (Non-repeating frequencies)
+  let base = Math.abs(sin(xs * 0.211 + zs * 0.153)) * 4.0;
+
+  // Medium-scale jaggedness
+  let detail = Math.abs(sin(xs * 0.789 - zs * 0.617)) * 2.0;
+
+  // High-frequency "noise" for texture
+  let erosion = Math.abs(sin(xs * 2.153 + zs * 3.141)) * 0.5;
+
+  // The Result: Sharp, dramatic, and chaotic
+  // (base + detail + erosion) can reach ~6.5. 
+  // 6.5 * 60 = 390 units of vertical drama.
+  let alt = 300 - (base + detail + erosion) * 60;
+
+  if (isGrid) altCache.set(key, alt);
+  return alt;
 }
 
 function drawLandscape(s) {
@@ -835,23 +865,26 @@ function drawLandscape(s) {
       addTile(tx, tz);
 
   // === Outer ring: full detail, frustum culled ===
+  let fwdX = -sin(s.yaw), fwdZ = -cos(s.yaw);
   for (let tz = gz - VIEW_FAR; tz < gz + VIEW_FAR; tz++) {
     for (let tx = gx - VIEW_FAR; tx <= gx + VIEW_FAR; tx++) {
       // Skip tiles already drawn in near ring
       if (tx >= gx - VIEW_NEAR && tx < gx + VIEW_NEAR && tz >= gz - VIEW_NEAR && tz < gz + VIEW_NEAR) continue;
       let cx = tx * TILE + TILE / 2, cz = tz * TILE + TILE / 2;
-      if (!inFrustum(s.x, s.z, cx, cz, s.yaw)) continue;
+      if (!inFrustum(s.x, s.z, cx, cz, fwdX, fwdZ)) continue;
       addTile(tx, tz);
     }
   }
 
   // Draw all fogged terrain tiles
-  for (let t of fogBatch) {
-    fill(t.r, t.g, t.b);
+  if (fogBatch.length > 0) {
     beginShape(TRIANGLES);
-    let v = t.v;
-    vertex(v[0], v[1], v[2]); vertex(v[3], v[4], v[5]); vertex(v[6], v[7], v[8]);
-    vertex(v[9], v[10], v[11]); vertex(v[12], v[13], v[14]); vertex(v[15], v[16], v[17]);
+    for (let t of fogBatch) {
+      fill(t.r, t.g, t.b);
+      let v = t.v;
+      vertex(v[0], v[1], v[2]); vertex(v[3], v[4], v[5]); vertex(v[6], v[7], v[8]);
+      vertex(v[9], v[10], v[11]); vertex(v[12], v[13], v[14]); vertex(v[15], v[16], v[17]);
+    }
     endShape();
   }
 
@@ -871,12 +904,14 @@ function drawLandscape(s) {
   pop();
 
   // Draw infected tiles
-  for (let inf of infected) {
-    fill(inf.r, inf.g, inf.b);
+  if (infected.length > 0) {
     beginShape(TRIANGLES);
-    let v = inf.v;
-    vertex(v[0], v[1], v[2]); vertex(v[3], v[4], v[5]); vertex(v[6], v[7], v[8]);
-    vertex(v[9], v[10], v[11]); vertex(v[12], v[13], v[14]); vertex(v[15], v[16], v[17]);
+    for (let inf of infected) {
+      fill(inf.r, inf.g, inf.b);
+      let v = inf.v;
+      vertex(v[0], v[1], v[2]); vertex(v[3], v[4], v[5]); vertex(v[6], v[7], v[8]);
+      vertex(v[9], v[10], v[11]); vertex(v[12], v[13], v[14]); vertex(v[15], v[16], v[17]);
+    }
     endShape();
   }
 }
@@ -893,12 +928,13 @@ function drawSea(s) {
 function drawTrees(s) {
   let treeCullDist = VIEW_FAR * TILE;
   let cullSq = treeCullDist * treeCullDist;
+  let fwdX = -sin(s.yaw), fwdZ = -cos(s.yaw);
   for (let t of trees) {
     let dx = s.x - t.x, dz = s.z - t.z;
     let dSq = dx * dx + dz * dz;
     if (dSq >= cullSq) continue;
     // Frustum cull trees
-    if (!inFrustum(s.x, s.z, t.x, t.z, s.yaw)) continue;
+    if (!inFrustum(s.x, s.z, t.x, t.z, fwdX, fwdZ)) continue;
     let y = getAltitude(t.x, t.z);
     if (aboveSea(y) || isLaunchpad(t.x, t.z)) continue;
 
