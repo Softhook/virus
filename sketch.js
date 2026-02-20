@@ -78,49 +78,37 @@ function checkMobile() {
 // === HELPERS ===
 const tileKey = (tx, tz) => tx + ',' + tz;
 const toTile = v => Math.floor(v / TILE);
-const isLaunchpad = (x, z) => x >= LAUNCH_MIN && x < LAUNCH_MAX && z >= LAUNCH_MIN && z < LAUNCH_MAX;
+const isLaunchpad = (x, z) => x >= LAUNCH_MIN && x <= LAUNCH_MAX && z >= LAUNCH_MIN && z <= LAUNCH_MAX;
 const aboveSea = y => y >= SEA - 1;
 
 // Frustum cull: is tile roughly in front of camera?
 function inFrustum(sx, sz, tx, tz, fwdX, fwdZ) {
   let dx = tx - sx, dz = tz - sz;
-  let fwd = fwdX * dx + fwdZ * dz;
-  if (fwd < -TILE * 3) return false;
-  let perp = abs(-fwdZ * dx + fwdX * dz);
-  return perp < fwd * 1.8 + TILE * 6;
+  return dx * fwdX + dz * fwdZ > -TILE * 2;
 }
-
 
 // Distance fog: blend colour toward sky
 function fogBlend(r, g, b, d) {
-  let f = constrain((d - FOG_START) / (FOG_END - FOG_START), 0, 1);
+  f = constrain((d - FOG_START) / (FOG_END - FOG_START), 0, 1);
   return [lerp(r, SKY_R, f), lerp(g, SKY_G, f), lerp(b, SKY_B, f)];
 }
 
 function shipDir(s) {
-  let cp = cos(s.pitch), sp = sin(s.pitch), sy = sin(s.yaw), cy = cos(s.yaw);
-  return { x: cp * -sy, y: sp, z: cp * -cy };
+  return {
+    x: sin(s.pitch) * -sin(s.yaw),
+    y: -cos(s.pitch),
+    z: sin(s.pitch) * -cos(s.yaw)
+  };
 }
 
 function resetShip(p, offsetX) {
-  Object.assign(p.ship, {
-    x: 400 + (offsetX || 0), z: 400, y: LAUNCH_ALT - 20,
-    vx: 0, vy: 0, vz: 0, pitch: 0, yaw: 0
-  });
+  p.ship = { x: offsetX, y: LAUNCH_ALT, z: 400, vx: 0, vy: 0, vz: 0, pitch: 0, yaw: 0 };
 }
 
 function createPlayer(id, keys, offsetX, labelColor) {
   let p = {
-    id,
-    keys,
-    labelColor,
-    ship: { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, pitch: 0, yaw: 0 },
-    bullets: [],
-    homingMissiles: [],
-    missilesRemaining: 1,
-    score: 0,
-    dead: false,
-    respawnTimer: 0
+    id, keys, labelColor, score: 0, dead: false, respawnTimer: 0,
+    bullets: [], homingMissiles: [], missilesRemaining: 1, mobileMissilePressed: false
   };
   resetShip(p, offsetX);
   return p;
@@ -131,7 +119,6 @@ function drawShadow(x, groundY, z, w, h) {
   push();
   translate(x, groundY - 0.5, z);
   rotateX(PI / 2);
-  noStroke();
   fill(0, 0, 0, 50);
   ellipse(0, 0, w, h);
   pop();
@@ -605,8 +592,18 @@ function updateShipInput(p) {
     if (joyCenter && joyPos) {
       let dx = joyPos.x - joyCenter.x;
       let dy = joyPos.y - joyCenter.y;
-      if (abs(dx) > 10) s.yaw += (dx > 0 ? -1 : 1) * YAW_RATE * min(1, (abs(dx) - 10) / 40);
-      if (abs(dy) > 10) s.pitch = constrain(s.pitch + (dy > 0 ? 1 : -1) * PITCH_RATE * min(1, (abs(dy) - 10) / 40), -PI / 2.2, PI / 2.2);
+
+      // Calculate normalized direction vector based on touches
+      let distSq = dx * dx + dy * dy;
+      if (distSq > 100) { // Deadzone of 10 pixels squared
+        let dist = sqrt(distSq);
+        let speedFactor = min(1, (dist - 10) / 40);
+
+        s.yaw += -(dx / dist) * YAW_RATE * speedFactor;
+
+        let pitchChange = (dy / dist) * PITCH_RATE * speedFactor * 0.5; // less vertical sensitive
+        s.pitch = constrain(s.pitch + pitchChange, -PI / 2.2, PI / 2.2);
+      }
     }
   }
 
@@ -1445,18 +1442,47 @@ function keyPressed() {
   }
 }
 
-function touchStarted() {
-  if (!fullscreen()) fullscreen(true);
-  // Default behavior is to keep touch going
+function touchStarted(event) {
+  if (gameState === 'menu') {
+    if (!fullscreen()) fullscreen(true);
+    setTimeout(() => { startGame(1); }, 50);
+    return false;
+  } else if (gameState === 'playing' && isMobile) {
+    if (!fullscreen()) fullscreen(true);
+    return false;
+  }
+}
+
+function touchEnded(event) {
+  if (gameState === 'playing' && isMobile) {
+    // Need to reset touch ids if touches array is empty or this touch was the left joystick
+    let stillGotLeft = false;
+    for (let i = 0; i < touches.length; i++) {
+      if (touches[i].id === leftTouchId) stillGotLeft = true;
+    }
+    if (!stillGotLeft) {
+      leftTouchId = null;
+      joyCenter = null;
+      joyPos = null;
+    }
+  }
+}
+
+function touchMoved(event) {
+  if (isMobile) {
+    return false;
+  }
 }
 
 function mousePressed() {
-  if (!fullscreen()) fullscreen(true);
+  if (!isMobile) {
+    if (!fullscreen()) fullscreen(true);
 
-  if (gameState === 'playing' && numPlayers === 1 && !isMobile) {
-    requestPointerLock();
-  } else if (gameState === 'menu' && isMobile) {
-    startGame(1);
+    if (gameState === 'menu') {
+      startGame(1);
+    } else if (gameState === 'playing' && numPlayers === 1) {
+      requestPointerLock();
+    }
   }
 }
 
