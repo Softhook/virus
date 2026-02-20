@@ -333,7 +333,7 @@ function drawMenu() {
   // Controls hint
   textSize(13);
   fill(100, 140, 100, 150);
-  text('P1: WASD + R/F pitch  Q shoot  E missile', 0, height / 2 - 55);
+  text('P1: Mouse/WASD + R/F pitch  Q shoot  E missile', 0, height / 2 - 55);
   text('P2: ARROWS + ;/\' pitch  . shoot  / missile', 0, height / 2 - 35);
 
   pop();
@@ -513,7 +513,8 @@ function updateShipInput(p) {
   }
 
   // Shoot
-  if (keyIsDown(k.shoot) && frameCount % 6 === 0)
+  let isShooting = keyIsDown(k.shoot) || (numPlayers === 1 && mouseIsPressed && mouseButton === LEFT);
+  if (isShooting && frameCount % 6 === 0)
     p.bullets.push(spawnProjectile(s, 25, 300));
 
   // Damping
@@ -810,9 +811,14 @@ function drawControlHints(p, pi, hw, h) {
   textAlign(CENTER, BOTTOM);
   textSize(11);
   fill(255, 255, 255, 120);
-  let hints = pi === 0
-    ? 'W thrust  A/D turn  R/F pitch  Q shoot  E missile  S brake'
-    : '↑ thrust  ←/→ turn  ;/\' pitch  . shoot  / missile  ↓ brake';
+  let hints = '';
+  if (numPlayers === 1) {
+    hints = 'W thrust  Mouse pitch/yaw  Q/LMB shoot  E missile  S brake  (Click to lock mouse)';
+  } else {
+    hints = pi === 0
+      ? 'W thrust  A/D turn  R/F pitch  Q shoot  E missile  S brake'
+      : '↑ thrust  ←/→ turn  ;/\' pitch  . shoot  / missile  ↓ brake';
+  }
   text(hints, 0, h / 2 - 8);
   pop();
 }
@@ -1313,9 +1319,19 @@ function keyPressed() {
 }
 
 function mousePressed() {
-  // No pointer lock needed for keyboard-only controls,
-  // but still allow fullscreen on click
   if (!fullscreen()) fullscreen(true);
+  if (gameState === 'playing' && numPlayers === 1) {
+    requestPointerLock();
+  }
+}
+
+function mouseMoved() {
+  if (gameState === 'playing' && numPlayers === 1 && !players[0].dead) {
+    // Mouse X controls yaw (turn left/right)
+    players[0].ship.yaw -= movedX * 0.003;
+    // Mouse Y controls pitch (up/down)
+    players[0].ship.pitch = constrain(players[0].ship.pitch + movedY * 0.003, -PI / 2.2, PI / 2.2);
+  }
 }
 
 function windowResized() { resizeCanvas(windowWidth, windowHeight); }
