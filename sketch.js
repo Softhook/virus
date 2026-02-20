@@ -58,7 +58,22 @@ let menuStars = []; // animated starfield for menu
 let players = [];
 let altCache = new Map();
 
+let isMobile = false;
 
+// Touch state
+let leftTouchId = null;
+let joyCenter = null;
+let joyPos = null;
+let touchBtns = {
+  thrust: { active: false, r: 40, col: [0, 255, 60], label: 'THR' },
+  shoot: { active: false, r: 40, col: [255, 60, 60], label: 'SHT' },
+  brake: { active: false, r: 35, col: [255, 200, 60], label: 'BRK' },
+  missile: { active: false, r: 30, col: [0, 200, 255], label: 'MSL' }
+};
+
+function checkMobile() {
+  isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+}
 
 // === HELPERS ===
 const tileKey = (tx, tz) => tx + ',' + tz;
@@ -193,6 +208,7 @@ function preload() {
 }
 
 function setup() {
+  checkMobile();
   createCanvas(windowWidth, windowHeight, WEBGL);
   textFont(gameFont);
 
@@ -324,17 +340,26 @@ function drawMenu() {
   let blink2 = sin(frameCount * 0.08 + 1.5) * 0.3 + 0.7;
 
   textSize(28);
-  fill(255, 255, 255, 255 * blink1);
-  text('PRESS 1 — SINGLE PLAYER', 0, optY);
+  if (isMobile) {
+    fill(255, 255, 255, 255 * blink1);
+    text('TAP TO START', 0, optY + 25);
+  } else {
+    fill(255, 255, 255, 255 * blink1);
+    text('PRESS 1 — SINGLE PLAYER', 0, optY);
 
-  fill(255, 255, 255, 255 * blink2);
-  text('PRESS 2 — MULTIPLAYER', 0, optY + 50);
+    fill(255, 255, 255, 255 * blink2);
+    text('PRESS 2 — MULTIPLAYER', 0, optY + 50);
+  }
 
   // Controls hint
   textSize(13);
   fill(100, 140, 100, 150);
-  text('P1: Mouse/WASD + R/F pitch  Q shoot  E missile', 0, height / 2 - 55);
-  text('P2: ARROWS + ;/\' pitch  . shoot  / missile', 0, height / 2 - 35);
+  if (isMobile) {
+    text('Use virtual joystick and buttons to play', 0, height / 2 - 40);
+  } else {
+    text('P1: Mouse/WASD + R/F pitch  Q shoot  E missile', 0, height / 2 - 55);
+    text('P2: ARROWS + ;/\' pitch  . shoot  / missile', 0, height / 2 - 35);
+  }
 
   pop();
 }
@@ -383,6 +408,7 @@ function renderPlayerView(gl, p, pi, viewX, viewW, viewH, pxDensity) {
   pop();
 
   drawPlayerHUD(p, pi, viewW, viewH);
+  if (isMobile && numPlayers === 1) drawMobileControls();
   gl.disable(gl.SCISSOR_TEST);
 }
 
@@ -475,12 +501,114 @@ function clearInfectionAt(wx, wz, p) {
   return cleared > 0;
 }
 
-// === SHIP INPUT (keyboard-only) ===
+// === MOBILE INPUT ===
+function updateMobileInput() {
+  if (!isMobile || gameState !== 'playing') return;
+
+  let bw = width, bh = height;
+  touchBtns.thrust.x = bw - 80; touchBtns.thrust.y = bh - 170;
+  touchBtns.shoot.x = bw - 80; touchBtns.shoot.y = bh - 70;
+  touchBtns.brake.x = bw - 190; touchBtns.brake.y = bh - 70;
+  touchBtns.missile.x = bw - 80; touchBtns.missile.y = bh - 260;
+
+  for (let b in touchBtns) touchBtns[b].active = false;
+
+  let leftFound = false;
+  for (let i = 0; i < touches.length; i++) {
+    let tx = touches[i].x; let ty = touches[i].y; let tid = touches[i].id;
+
+    if (tx > bw / 2) {
+      for (let b in touchBtns) {
+        if (dist(tx, ty, touchBtns[b].x, touchBtns[b].y) < touchBtns[b].r * 1.5) {
+          touchBtns[b].active = true;
+        }
+      }
+    } else {
+      if (leftTouchId === tid) {
+        joyPos = { x: tx, y: ty };
+        leftFound = true;
+      } else if (!leftTouchId) {
+        leftTouchId = tid;
+        joyCenter = { x: tx, y: ty };
+        joyPos = { x: tx, y: ty };
+        leftFound = true;
+      }
+    }
+  }
+
+  if (!leftFound) {
+    leftTouchId = null;
+    joyCenter = null;
+    joyPos = null;
+  }
+}
+
+function drawMobileControls() {
+  setup2DViewport();
+
+  push();
+  translate(-width / 2, -height / 2, 0); // shift drawing context to top left
+
+  if (joyCenter && joyPos) {
+    noStroke();
+    fill(255, 255, 255, 40);
+    circle(joyCenter.x, joyCenter.y, 100);
+    fill(255, 255, 255, 120);
+    let d = dist(joyCenter.x, joyCenter.y, joyPos.x, joyPos.y);
+    let a = atan2(joyPos.y - joyCenter.y, joyPos.x - joyCenter.x);
+    let r = min(d, 50);
+    circle(joyCenter.x + cos(a) * r, joyCenter.y + sin(a) * r, 40);
+  }
+
+  for (let b in touchBtns) {
+    let btn = touchBtns[b];
+    stroke(btn.col[0], btn.col[1], btn.col[2], btn.active ? 200 : 80);
+    strokeWeight(2);
+    fill(btn.col[0], btn.col[1], btn.col[2], btn.active ? 80 : 20);
+    circle(btn.x, btn.y, btn.r * 2);
+    noStroke();
+    fill(255, btn.active ? 255 : 150);
+    textAlign(CENTER, CENTER);
+    textSize(max(10, btn.r * 0.4));
+    text(btn.label, btn.x, btn.y);
+  }
+  pop();
+}
+
+// === SHIP INPUT ===
 function updateShipInput(p) {
   let s = p.ship;
   if (p.dead) return;
 
   let k = p.keys;
+
+  let isThrusting = keyIsDown(k.thrust);
+  let isBraking = keyIsDown(k.brake);
+  let isShooting = keyIsDown(k.shoot) || (numPlayers === 1 && !isMobile && mouseIsPressed && mouseButton === LEFT);
+
+  if (isMobile && p.id === 0) {
+    updateMobileInput();
+    if (touchBtns.thrust.active) isThrusting = true;
+    if (touchBtns.brake.active) isBraking = true;
+    if (touchBtns.shoot.active) isShooting = true;
+
+    if (touchBtns.missile.active && !p.mobileMissilePressed) {
+      if (p.missilesRemaining > 0 && !p.dead) {
+        p.missilesRemaining--;
+        p.homingMissiles.push(spawnProjectile(p.ship, 8, 300));
+      }
+      p.mobileMissilePressed = true;
+    } else if (!touchBtns.missile.active) {
+      p.mobileMissilePressed = false;
+    }
+
+    if (joyCenter && joyPos) {
+      let dx = joyPos.x - joyCenter.x;
+      let dy = joyPos.y - joyCenter.y;
+      if (abs(dx) > 10) s.yaw += (dx > 0 ? -1 : 1) * YAW_RATE * min(1, (abs(dx) - 10) / 40);
+      if (abs(dy) > 10) s.pitch = constrain(s.pitch + (dy > 0 ? 1 : -1) * PITCH_RATE * min(1, (abs(dy) - 10) / 40), -PI / 2.2, PI / 2.2);
+    }
+  }
 
   // Yaw (turn left/right) — use keyIsDown() to avoid stuck-key issues
   if (keyIsDown(k.left)) s.yaw += YAW_RATE;
@@ -494,7 +622,7 @@ function updateShipInput(p) {
   s.vy += GRAV;
 
   // Thrust (forward along current heading)
-  if (keyIsDown(k.thrust)) {
+  if (isThrusting) {
     let pw = 0.45;
     let dx = sin(s.pitch) * -sin(s.yaw);
     let dy = -cos(s.pitch);
@@ -508,12 +636,11 @@ function updateShipInput(p) {
   }
 
   // Brake / reverse thrust
-  if (keyIsDown(k.brake)) {
+  if (isBraking) {
     s.vx *= 0.96; s.vy *= 0.96; s.vz *= 0.96;
   }
 
   // Shoot
-  let isShooting = keyIsDown(k.shoot) || (numPlayers === 1 && mouseIsPressed && mouseButton === LEFT);
   if (isShooting && frameCount % 6 === 0)
     p.bullets.push(spawnProjectile(s, 25, 300));
 
@@ -1318,15 +1445,23 @@ function keyPressed() {
   }
 }
 
+function touchStarted() {
+  if (!fullscreen()) fullscreen(true);
+  // Default behavior is to keep touch going
+}
+
 function mousePressed() {
   if (!fullscreen()) fullscreen(true);
-  if (gameState === 'playing' && numPlayers === 1) {
+
+  if (gameState === 'playing' && numPlayers === 1 && !isMobile) {
     requestPointerLock();
+  } else if (gameState === 'menu' && isMobile) {
+    startGame(1);
   }
 }
 
 function mouseMoved() {
-  if (gameState === 'playing' && numPlayers === 1 && !players[0].dead) {
+  if (gameState === 'playing' && numPlayers === 1 && !players[0].dead && !isMobile) {
     // Mouse X controls yaw (turn left/right)
     players[0].ship.yaw -= movedX * 0.003;
     // Mouse Y controls pitch (up/down)
