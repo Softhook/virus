@@ -766,7 +766,10 @@ function checkCollisions(p) {
         p.score += 100; killed = true; break;
       }
     }
-    if (!killed && dist(sX, sY, sZ, eX, eY, eZ) < 70) killPlayer(p);
+    if (!killed && dist(sX, sY, sZ, eX, eY, eZ) < 70) {
+      killPlayer(p);
+      return;
+    }
   }
 
   // Bullet-tree: only infected trees absorb bullets
