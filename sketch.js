@@ -234,6 +234,7 @@ varying vec4 vColor;
 varying vec4 vWorldPos;
 uniform float uTime;
 uniform vec3 uPulses[5];
+uniform vec2 uFogDist;
 
 void main() {  
   vec3 cyberColor = vec3(0.0);
@@ -254,10 +255,11 @@ void main() {
   
   vec3 outColor = vColor.rgb + cyberColor;
   
-  // Darken slightly in the distance instead of fog to give depth
-  // Use length from camera/origin vaguely to avoid adding uniforms just for shading depth
-  float depthDarken = clamp(1.0 - (length(gl_FragCoord.z / gl_FragCoord.w) / 4500.0), 0.3, 1.0);
-  outColor *= depthDarken;
+  // Apply fog to smoothly hide chunk loading edges
+  float dist = gl_FragCoord.z / gl_FragCoord.w;
+  float fogFactor = smoothstep(uFogDist.x, uFogDist.y, dist);
+  vec3 fogColor = vec3(30.0 / 255.0, 60.0 / 255.0, 120.0 / 255.0);
+  outColor = mix(outColor, fogColor, fogFactor);
 
   gl_FragColor = vec4(outColor, vColor.a);
 }
@@ -468,7 +470,7 @@ function renderPlayerView(gl, p, pi, viewX, viewW, viewH, pxDensity) {
   drawLandscape(s); drawSea(s);
   if (typeof window.BENCHMARK === 'undefined' || !window.BENCHMARK.disableTrees) drawTrees(s);
   if (typeof window.BENCHMARK === 'undefined' || !window.BENCHMARK.disableBuildings) drawBuildings(s);
-  if (typeof window.BENCHMARK === 'undefined' || !window.BENCHMARK.disableEnemies) drawEnemies(s.x, s.z);
+  if (typeof window.BENCHMARK === 'undefined' || !window.BENCHMARK.disableEnemies) drawEnemies(s);
 
   for (let player of players) {
     if (!player.dead) shipDisplay(player.ship, player.labelColor);
@@ -1229,6 +1231,17 @@ function getChunkGeometry(cx, cz) {
   return geom;
 }
 
+function getFogColor(col, depth) {
+  let fogEnd = VIEW_FAR * TILE + 400; // right at the edge
+  let fogStart = VIEW_FAR * TILE - 800;
+  let f = constrain(map(depth, fogStart, fogEnd, 0, 1), 0, 1);
+  return [
+    lerp(col[0], SKY_R, f),
+    lerp(col[1], SKY_G, f),
+    lerp(col[2], SKY_B, f)
+  ];
+}
+
 function drawLandscape(s) {
   let gx = toTile(s.x), gz = toTile(s.z);
   noStroke();
@@ -1242,6 +1255,7 @@ function drawLandscape(s) {
 
   shader(terrainShader);
   terrainShader.setUniform('uTime', millis() / 1000.0);
+  terrainShader.setUniform('uFogDist', [VIEW_FAR * TILE - 800, VIEW_FAR * TILE + 400]);
 
   let pulseArr = [];
   for (let i = 0; i < 5; i++) {
@@ -1302,6 +1316,8 @@ function drawLandscape(s) {
     }
   }
 
+  drawTileBatch(infected);
+
   // Restore lighting for standard objects
   resetShader();
   directionalLight(240, 230, 210, 0.5, 0.8, -0.3);
@@ -1310,7 +1326,9 @@ function drawLandscape(s) {
   // Solid launchpad base
   push();
   noStroke();
-  fill(80, 80, 75);
+  let padDepth = (400 - camX) * fwdX + (400 - camZ) * fwdZ;
+  let padCol = getFogColor([80, 80, 75], padDepth);
+  fill(padCol[0], padCol[1], padCol[2]);
   let padW = LAUNCH_MAX - LAUNCH_MIN;
   let padTop = LAUNCH_ALT + 2;
   let padH = SEA - padTop + 10;
@@ -1326,20 +1344,20 @@ function drawLandscape(s) {
   push();
   let mX = LAUNCH_MAX - 100;
   for (let mZ = LAUNCH_MIN + 200; mZ <= LAUNCH_MAX - 200; mZ += 120) {
-    fill(255, 140, 20);
+    let mDepth = (mX - camX) * fwdX + (mZ - camZ) * fwdZ;
+    let bCol = getFogColor([60, 60, 60], mDepth);
+    let mCol = getFogColor([255, 140, 20], mDepth);
     push();
     translate(mX, LAUNCH_ALT, mZ);
     // Base/stand
-    fill(60, 60, 60);
+    fill(bCol[0], bCol[1], bCol[2]);
     push(); translate(0, -10, 0); box(30, 20, 30); pop();
     // Missile body
-    fill(255, 140, 20);
+    fill(mCol[0], mCol[1], mCol[2]);
     push(); translate(0, -70, 0); rotateX(Math.PI); cone(18, 100, 4, 1); pop();
     pop();
   }
   pop();
-
-  drawTileBatch(infected);
 }
 
 function drawSea(s) {
@@ -1371,14 +1389,17 @@ function drawTrees(s) {
     let inf = !!infectedTiles[tileKey(toTile(t.x), toTile(t.z))];
 
     // Trunk
-    fill(inf ? 80 : 100, inf ? 40 : 65, inf ? 20 : 25);
+    let depth = (t.x - camX) * fwdX + (t.z - camZ) * fwdZ;
+    let trCol = getFogColor([inf ? 80 : 100, inf ? 40 : 65, inf ? 20 : 25], depth);
+    fill(trCol[0], trCol[1], trCol[2]);
     push(); translate(0, -h / 2, 0); box(5, h, 5); pop();
 
     // Canopy
     let tv = TREE_VARIANTS[vi];
     let isUmbrella = (vi === 2); // Make the 3rd variant an umbrella tree!
-    let c1 = inf ? tv.infected : tv.healthy;
-    fill(c1[0], c1[1], c1[2]);
+    let c1Orig = inf ? tv.infected : tv.healthy;
+    let c1Col = getFogColor(c1Orig, depth);
+    fill(c1Col[0], c1Col[1], c1Col[2]);
 
     if (isUmbrella) {
       push(); translate(0, -h, 0); cone(35 * sc, 15 * sc, 6, 1); pop();
@@ -1387,8 +1408,9 @@ function drawTrees(s) {
       push(); translate(0, -h - cn[2] * sc, 0); cone(cn[0] * sc, cn[1] * sc, 4, 1); pop();
 
       if (tv.cones2) {
-        let c2 = inf ? tv.infected2 : tv.healthy2;
-        fill(c2[0], c2[1], c2[2]);
+        let c2Orig = inf ? tv.infected2 : tv.healthy2;
+        let c2Col = getFogColor(c2Orig, depth);
+        fill(c2Col[0], c2Col[1], c2Col[2]);
         let cn2 = tv.cones2[0];
         push(); translate(0, -h - cn2[2] * sc, 0); cone(cn2[0] * sc, cn2[1] * sc, 4, 1); pop();
       }
@@ -1416,44 +1438,52 @@ function drawBuildings(s) {
     let d = sqrt(dx * dx + dz * dz);
     let inf = !!infectedTiles[tileKey(toTile(b.x), toTile(b.z))];
 
+    let depth = (b.x - camX) * fwdX + (b.z - camZ) * fwdZ;
     push(); translate(b.x, y, b.z); noStroke();
 
     // Lander style buildings
     if (b.type === 0) {
       // House with red roof
       let bCol = inf ? [200, 50, 50] : [220, 220, 220]; // white base
-      fill(bCol[0], bCol[1], bCol[2]);
+      let bc = getFogColor(bCol, depth);
+      fill(bc[0], bc[1], bc[2]);
       push(); translate(0, -b.h / 2, 0); box(b.w, b.h, b.d); pop();
 
       let rCol = inf ? [150, 30, 30] : [220, 50, 50]; // red roof
-      fill(rCol[0], rCol[1], rCol[2]);
+      let rc = getFogColor(rCol, depth);
+      fill(rc[0], rc[1], rc[2]);
       push(); translate(0, -b.h - b.w / 3, 0); rotateY(PI / 4); cone(b.w * 0.8, b.w / 1.5, 4, 1); pop();
 
     } else if (b.type === 1) {
       // Silo / Tower with round top
       let bCol = inf ? [200, 50, 50] : [150, 160, 170]; // grey
-      fill(bCol[0], bCol[1], bCol[2]);
+      let bc = getFogColor(bCol, depth);
+      fill(bc[0], bc[1], bc[2]);
       push(); translate(0, -b.h / 2, 0); cylinder(b.w / 2, b.h, 8, 1); pop();
 
       let topCol = inf ? [150, 30, 30] : [80, 180, 220]; // blue dome
-      fill(topCol[0], topCol[1], topCol[2]);
+      let tc = getFogColor(topCol, depth);
+      fill(tc[0], tc[1], tc[2]);
       push(); translate(0, -b.h, 0); sphere(b.w / 2, 8, 8); pop();
 
     } else if (b.type === 2) {
       // Factory complex
       let bCol = inf ? [200, 50, 50] : b.col; // original random color
-      fill(bCol[0], bCol[1], bCol[2]);
+      let bc = getFogColor(bCol, depth);
+      fill(bc[0], bc[1], bc[2]);
       push(); translate(0, -b.h / 4, 0); box(b.w * 1.5, b.h / 2, b.d * 1.5); pop();
       push(); translate(b.w * 0.3, -b.h / 2 - b.h / 8, -b.d * 0.2); box(b.w / 2, b.h / 4, b.d / 2); pop();
 
       // Smokestack
       let sCol = inf ? [120, 20, 20] : [80, 80, 80];
-      fill(sCol[0], sCol[1], sCol[2]);
+      let sc = getFogColor(sCol, depth);
+      fill(sc[0], sc[1], sc[2]);
       push(); translate(-b.w * 0.4, -b.h, b.d * 0.4); cylinder(b.w * 0.15, b.h, 8, 1); pop();
     } else {
       // Floating Diamond (Zarch style)
       let bCol = inf ? [200, 50, 50] : [60, 180, 240]; // cyan diamond
-      fill(bCol[0], bCol[1], bCol[2]);
+      let bc = getFogColor(bCol, depth);
+      fill(bc[0], bc[1], bc[2]);
       push();
       let floatY = y - b.h - 100 - sin(frameCount * 0.02 + b.x) * 50;
       translate(0, floatY - y, 0);
@@ -1500,11 +1530,15 @@ function shipDisplay(s, tintColor) {
 }
 
 // === ENEMIES ===
-function drawEnemies(camX, camZ) {
+function drawEnemies(s) {
+  let fwdX = -sin(s.yaw), fwdZ = -cos(s.yaw);
+  let camX = s.x - fwdX * 550, camZ = s.z - fwdZ * 550;
   let cullSq = CULL_DIST * CULL_DIST;
   for (let e of enemies) {
-    let dx = e.x - camX, dz = e.z - camZ;
+    let dx = e.x - s.x, dz = e.z - s.z;
     if (dx * dx + dz * dz > cullSq) continue;
+
+    let depth = (e.x - camX) * fwdX + (e.z - camZ) * fwdZ;
 
     push(); translate(e.x, e.y, e.z);
 
@@ -1517,7 +1551,9 @@ function drawEnemies(camX, camZ) {
         let pitch = asin(fvY / d);
         rotateX(-pitch);
       }
-      noStroke(); fill(255, 150, 0);
+      noStroke();
+      let ec = getFogColor([255, 150, 0], depth);
+      fill(ec[0], ec[1], ec[2]);
       beginShape(TRIANGLES);
       vertex(0, 0, 20); vertex(-15, 0, -15); vertex(15, 0, -15);
       vertex(0, 0, 20); vertex(-15, 0, -15); vertex(0, -10, 0);
@@ -1528,7 +1564,8 @@ function drawEnemies(camX, camZ) {
     } else {
       rotateY(frameCount * 0.15); noStroke();
       for (let [yOff, col] of [[-10, [220, 30, 30]], [6, [170, 15, 15]]]) {
-        fill(...col);
+        let oc = getFogColor(col, depth);
+        fill(oc[0], oc[1], oc[2]);
         beginShape(TRIANGLES);
         vertex(0, yOff, -25); vertex(-22, 0, 0); vertex(22, 0, 0);
         vertex(0, yOff, 25); vertex(-22, 0, 0); vertex(22, 0, 0);
@@ -1536,7 +1573,8 @@ function drawEnemies(camX, camZ) {
         vertex(0, yOff, -25); vertex(22, 0, 0); vertex(0, yOff, 25);
         endShape();
       }
-      fill(255, 60, 60);
+      let cc = getFogColor([255, 60, 60], depth);
+      fill(cc[0], cc[1], cc[2]);
       push(); translate(0, -14, 0); box(3, 14, 3); pop();
     }
     pop();
