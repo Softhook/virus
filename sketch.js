@@ -542,6 +542,26 @@ function draw() {
   if (gameState === 'menu') { drawMenu(); return; }
   if (gameState === 'gameover') { drawGameOver(); return; }
 
+  // --- Dynamic Performance Scaling ---
+  if (frameCount > 60 && frameCount % 120 === 0 && (typeof window.BENCHMARK === 'undefined' || !window.BENCHMARK.active)) {
+    let fps = frameRate();
+    if (!window.maxObservedFPS) window.maxObservedFPS = 60;
+    if (fps > window.maxObservedFPS + 2) window.maxObservedFPS = fps;
+
+    let targetFPS = window.maxObservedFPS > 70 ? 75 : 60;
+
+    if (fps < targetFPS * 0.9) {
+      VIEW_NEAR = max(15, VIEW_NEAR - 2);
+      VIEW_FAR = max(20, VIEW_FAR - 2);
+      CULL_DIST = max(2000, CULL_DIST - 400);
+    } else if (fps >= targetFPS * 0.95) {
+      VIEW_NEAR = min(35, VIEW_NEAR + 1);
+      VIEW_FAR = min(50, VIEW_FAR + 1);
+      CULL_DIST = min(6000, CULL_DIST + 200);
+    }
+  }
+  // -----------------------------------
+
   if (altCache.size > 10000) altCache.clear();
   if (chunkCache.size > 200) chunkCache.clear();
 
