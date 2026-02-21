@@ -1,9 +1,10 @@
 // === CONSTANTS ===
-const TILE = 120, SEA = 200, LAUNCH_ALT = 100, GRAV = 0.09;
+let TILE = 120;
+const SEA = 200, LAUNCH_ALT = 100, GRAV = 0.09;
 // View rings: near = always drawn, outer = frustum culled (all at full tile detail)
-const VIEW_NEAR = 20, VIEW_FAR = 30;
+let VIEW_NEAR = 20, VIEW_FAR = 30;
 // Fog (linear): fades terrain into sky colour
-const FOG_START = 2000, FOG_END = 4000;
+let FOG_START = 2000, FOG_END = 4000;
 const SKY_R = 30, SKY_G = 60, SKY_B = 120;
 const ORTHO_DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const MAX_INF = 2000, INF_RATE = 0.01, CLEAR_R = 3;
@@ -111,6 +112,7 @@ function fireMissile(p) {
 }
 
 function drawShadow(x, groundY, z, w, h) {
+  if (typeof window.BENCHMARK !== 'undefined' && window.BENCHMARK.disableShadows) return;
   if (aboveSea(groundY)) return;
   push();
   translate(x, groundY - 0.5, z);
@@ -121,6 +123,7 @@ function drawShadow(x, groundY, z, w, h) {
 }
 
 function drawShipShadow(x, groundY, z, yaw, alt) {
+  if (typeof window.BENCHMARK !== 'undefined' && window.BENCHMARK.disableShadows) return;
   if (aboveSea(groundY)) return;
   let spread = max(1, (groundY - alt) * 0.012);
   let alpha = map(groundY - alt, 0, 600, 60, 15, true);
@@ -400,7 +403,10 @@ function renderPlayerView(gl, p, pi, viewX, viewW, viewH, pxDensity) {
   directionalLight(240, 230, 210, 0.5, 0.8, -0.3);
   ambientLight(60, 60, 70);
 
-  drawLandscape(s); drawSea(s); drawTrees(s); drawBuildings(s); drawEnemies(s.x, s.z);
+  drawLandscape(s); drawSea(s);
+  if (typeof window.BENCHMARK === 'undefined' || !window.BENCHMARK.disableTrees) drawTrees(s);
+  if (typeof window.BENCHMARK === 'undefined' || !window.BENCHMARK.disableBuildings) drawBuildings(s);
+  if (typeof window.BENCHMARK === 'undefined' || !window.BENCHMARK.disableEnemies) drawEnemies(s.x, s.z);
 
   for (let player of players) {
     if (!player.dead) shipDisplay(player.ship, player.labelColor);
@@ -416,6 +422,45 @@ function renderPlayerView(gl, p, pi, viewX, viewW, viewH, pxDensity) {
 }
 
 function draw() {
+  if (typeof window.BENCHMARK !== 'undefined' && window.BENCHMARK.active) {
+    window.BENCHMARK.t0 = performance.now();
+    if (window.BENCHMARK.setup) {
+      if (window.BENCHMARK.viewNear) VIEW_NEAR = window.BENCHMARK.viewNear;
+      if (window.BENCHMARK.viewFar) VIEW_FAR = window.BENCHMARK.viewFar;
+      if (window.BENCHMARK.fogStart) FOG_START = window.BENCHMARK.fogStart;
+      if (window.BENCHMARK.fogEnd) FOG_END = window.BENCHMARK.fogEnd;
+      if (window.BENCHMARK.tileSize) TILE = window.BENCHMARK.tileSize;
+
+      const simpleNoiseCfg = !!window.BENCHMARK.simpleNoise;
+      if (simpleNoiseCfg !== window._lastSimpleNoise) {
+        altCache.clear();
+        window._lastSimpleNoise = simpleNoiseCfg;
+      }
+
+      const simpleColorsCfg = !!window.BENCHMARK.simpleColors;
+      if (simpleColorsCfg !== window._lastSimpleColors) {
+        altCache.clear();
+        window._lastSimpleColors = simpleColorsCfg;
+      }
+
+      if (window.BENCHMARK.tileSize !== window._lastTileSize) {
+        altCache.clear();
+        window._lastTileSize = window.BENCHMARK.tileSize;
+      }
+      window.BENCHMARK.setup = false;
+    }
+    if (gameState === 'menu') {
+      startGame(1);
+    }
+    if (gameState === 'playing' && !window.BENCHMARK.done) {
+      window.BENCHMARK.frames = (window.BENCHMARK.frames || 0) + 1;
+      if (window.BENCHMARK.frames === 130) {
+        console.log("BENCHMARK_DONE:" + (window.BENCHMARK.sumDraw / 100).toFixed(2));
+        window.BENCHMARK.done = true;
+      }
+    }
+  }
+
   if (gameState === 'menu') { drawMenu(); return; }
   if (gameState === 'gameover') { drawGameOver(); return; }
 
@@ -470,6 +515,13 @@ function draw() {
         p.dead = false;
         resetShip(p, numPlayers === 1 ? 400 : (p.id === 0 ? 300 : 500));
       }
+    }
+  }
+
+  if (typeof window.BENCHMARK !== 'undefined' && window.BENCHMARK.active) {
+    if (gameState === 'playing' && !window.BENCHMARK.done && window.BENCHMARK.frames > 30) {
+      let t1 = performance.now();
+      window.BENCHMARK.sumDraw = (window.BENCHMARK.sumDraw || 0) + (t1 - window.BENCHMARK.t0);
     }
   }
 }
@@ -993,8 +1045,13 @@ function getGridAltitude(tx, tz) {
     alt = LAUNCH_ALT;
   } else {
     let xs = x * 0.0008, zs = z * 0.0008;
-    let elevation = noise(xs, zs) + 0.5 * noise(xs * 2.5, zs * 2.5) + 0.25 * noise(xs * 5, zs * 5);
-    elevation = Math.pow(elevation / 1.75, 2.0); // Flatter valleys, steep hills
+    let elevation = noise(xs, zs);
+
+    if (typeof window.BENCHMARK === 'undefined' || !window.BENCHMARK.simpleNoise) {
+      elevation += 0.5 * noise(xs * 2.5, zs * 2.5) + 0.25 * noise(xs * 5, zs * 5);
+      elevation = Math.pow(elevation / 1.75, 2.0); // Flatter valleys, steep hills
+    }
+
     alt = 300 - elevation * 550;
   }
 
@@ -1063,23 +1120,33 @@ function drawLandscape(s) {
       return;
     }
 
-    let rand = Math.abs(Math.sin(tx * 12.9898 + tz * 78.233)) * 43758.5453;
-    rand = rand - Math.floor(rand);
-
     let baseR, baseG, baseB;
-    if (avgY > SEA - 15) {
-      let colors = [[230, 210, 80], [200, 180, 60], [150, 180, 50]];
-      let col = colors[Math.floor(rand * 3)];
-      baseR = col[0]; baseG = col[1]; baseB = col[2];
+
+    if (typeof window.BENCHMARK !== 'undefined' && window.BENCHMARK.simpleColors) {
+      // Just use fixed color values - no noise, no math, no random
+      if (avgY > SEA - 15) {
+        baseR = 200; baseG = 180; baseB = 60; // Sand
+      } else {
+        baseR = 60; baseG = 180; baseB = 60; // Grass
+      }
     } else {
-      let colors = [
-        [60, 180, 60], [30, 120, 40], [180, 200, 50],
-        [220, 200, 80], [210, 130, 140], [180, 140, 70]
-      ];
-      let patch = noise(tx * 0.15, tz * 0.15);
-      let colIdx = Math.floor((patch * 2.0 + rand * 0.2) * 6) % 6;
-      let col = colors[colIdx];
-      baseR = col[0]; baseG = col[1]; baseB = col[2];
+      let rand = Math.abs(Math.sin(tx * 12.9898 + tz * 78.233)) * 43758.5453;
+      rand = rand - Math.floor(rand);
+
+      if (avgY > SEA - 15) {
+        let colors = [[230, 210, 80], [200, 180, 60], [150, 180, 50]];
+        let col = colors[Math.floor(rand * 3)];
+        baseR = col[0]; baseG = col[1]; baseB = col[2];
+      } else {
+        let colors = [
+          [60, 180, 60], [30, 120, 40], [180, 200, 50],
+          [220, 200, 80], [210, 130, 140], [180, 140, 70]
+        ];
+        let patch = noise(tx * 0.15, tz * 0.15);
+        let colIdx = Math.floor((patch * 2.0 + rand * 0.2) * 6) % 6;
+        let col = colors[colIdx];
+        baseR = col[0]; baseG = col[1]; baseB = col[2];
+      }
     }
 
     let chkR = chk ? baseR : baseR * 0.85;
@@ -1087,6 +1154,12 @@ function drawLandscape(s) {
     let chkB = chk ? baseB : baseB * 0.85;
 
     let checkerFade = constrain((d - FOG_START * 0.5) / (FOG_END * 0.4), 0, 1);
+
+    // Completely disable checkerboard if requested
+    if (typeof window.BENCHMARK !== 'undefined' && (window.BENCHMARK.disableCheckerboard || window.BENCHMARK.simpleColors)) {
+      checkerFade = 1.0;
+    }
+
     let finalR = lerp(chkR, baseR * 0.9, checkerFade);
     let finalG = lerp(chkG, baseG * 0.9, checkerFade);
     let finalB = lerp(chkB, baseB * 0.9, checkerFade);
