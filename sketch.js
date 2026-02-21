@@ -75,9 +75,15 @@ const isLaunchpad = (x, z) => x >= LAUNCH_MIN && x <= LAUNCH_MAX && z >= LAUNCH_
 const aboveSea = y => y >= SEA - 1;
 
 // Frustum cull: is tile roughly in front of camera?
-function inFrustum(sx, sz, tx, tz, fwdX, fwdZ) {
-  let dx = tx - sx, dz = tz - sz;
-  return dx * fwdX + dz * fwdZ > -TILE * 2;
+function inFrustum(camX, camZ, tx, tz, fwdX, fwdZ) {
+  let dx = tx - camX, dz = tz - camZ;
+  let fwdDist = dx * fwdX + dz * fwdZ;
+  if (fwdDist < -TILE * 5) return false;
+  let rightDist = dx * -fwdZ + dz * fwdX;
+  let aspect = (numPlayers === 1 ? width : width * 0.5) / height;
+  let slope = 0.57735 * aspect + 0.3; // tan(PI/6) * aspect + safe margin
+  let halfWidth = (fwdDist > 0 ? fwdDist : 0) * slope + TILE * 6;
+  return Math.abs(rightDist) <= halfWidth;
 }
 
 // Distance fog: blend colour toward sky
@@ -1085,8 +1091,8 @@ function drawLandscape(s) {
 
   let infected = [];
   let fogBatch = [];
-  const VIEW_NEAR_SQ = VIEW_NEAR * VIEW_NEAR;
   let fwdX = -sin(s.yaw), fwdZ = -cos(s.yaw);
+  let camX = s.x - fwdX * 550, camZ = s.z - fwdZ * 550;
 
   // Helper: add a single tile to the render lists
   function addTile(tx, tz) {
@@ -1175,8 +1181,7 @@ function drawLandscape(s) {
   for (let tz = gz - VIEW_FAR; tz < gz + VIEW_FAR; tz++) {
     for (let tx = gx - VIEW_FAR; tx <= gx + VIEW_FAR; tx++) {
       let cx = tx * TILE + TILE * 0.5, cz = tz * TILE + TILE * 0.5;
-      let inNear = tx >= gx - VIEW_NEAR && tx <= gx + VIEW_NEAR && tz >= gz - VIEW_NEAR && tz <= gz + VIEW_NEAR;
-      if (!inNear && !inFrustum(s.x, s.z, cx, cz, fwdX, fwdZ)) continue;
+      if (!inFrustum(camX, camZ, cx, cz, fwdX, fwdZ)) continue;
       addTile(tx, tz);
     }
   }
@@ -1234,12 +1239,13 @@ function drawTrees(s) {
   let treeCullDist = VIEW_FAR * TILE;
   let cullSq = treeCullDist * treeCullDist;
   let fwdX = -sin(s.yaw), fwdZ = -cos(s.yaw);
+  let camX = s.x - fwdX * 550, camZ = s.z - fwdZ * 550;
   for (let t of trees) {
     let dx = s.x - t.x, dz = s.z - t.z;
     let dSq = dx * dx + dz * dz;
     if (dSq >= cullSq) continue;
     // Frustum cull trees
-    if (!inFrustum(s.x, s.z, t.x, t.z, fwdX, fwdZ)) continue;
+    if (!inFrustum(camX, camZ, t.x, t.z, fwdX, fwdZ)) continue;
     let y = getAltitude(t.x, t.z);
     if (aboveSea(y) || isLaunchpad(t.x, t.z)) continue;
 
@@ -1286,10 +1292,11 @@ function drawTrees(s) {
 function drawBuildings(s) {
   let cullSq = VIEW_FAR * TILE * VIEW_FAR * TILE;
   let fwdX = -sin(s.yaw), fwdZ = -cos(s.yaw);
+  let camX = s.x - fwdX * 550, camZ = s.z - fwdZ * 550;
   for (let b of buildings) {
     let dx = s.x - b.x, dz = s.z - b.z;
     if (dx * dx + dz * dz >= cullSq) continue;
-    if (!inFrustum(s.x, s.z, b.x, b.z, fwdX, fwdZ)) continue;
+    if (!inFrustum(camX, camZ, b.x, b.z, fwdX, fwdZ)) continue;
     let y = getAltitude(b.x, b.z);
     if (aboveSea(y) || isLaunchpad(b.x, b.z)) continue;
 
