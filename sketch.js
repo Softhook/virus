@@ -81,11 +81,11 @@ function inFrustum(sx, sz, tx, tz, fwdX, fwdZ) {
 
 // Distance fog: blend colour toward sky
 function fogBlend(r, g, b, d) {
-  f = constrain((d - FOG_START) / (FOG_END - FOG_START), 0, 1);
+  let f = constrain((d - FOG_START) / (FOG_END - FOG_START), 0, 1);
   return [lerp(r, SKY_R, f), lerp(g, SKY_G, f), lerp(b, SKY_B, f)];
 }
 
-function shipDir(s) {
+function shipUpDir(s) {
   return {
     x: sin(s.pitch) * -sin(s.yaw),
     y: -cos(s.pitch),
@@ -104,6 +104,13 @@ function createPlayer(id, keys, offsetX, labelColor) {
   };
   resetShip(p, offsetX);
   return p;
+}
+
+function fireMissile(p) {
+  if (p.missilesRemaining > 0 && !p.dead) {
+    p.missilesRemaining--;
+    p.homingMissiles.push(spawnProjectile(p.ship, 8, 300));
+  }
 }
 
 function drawShadow(x, groundY, z, w, h) {
@@ -598,10 +605,7 @@ function updateShipInput(p) {
     if (mobileControls.btns.shoot.active) isShooting = true;
 
     if (mobileControls.btns.missile.active && !p.mobileMissilePressed) {
-      if (p.missilesRemaining > 0 && !p.dead) {
-        p.missilesRemaining--;
-        p.homingMissiles.push(spawnProjectile(p.ship, 8, 300));
-      }
+      fireMissile(p);
       p.mobileMissilePressed = true;
     } else if (!mobileControls.btns.missile.active) {
       p.mobileMissilePressed = false;
@@ -636,17 +640,14 @@ function updateShipInput(p) {
   // Gravity
   s.vy += GRAV;
 
-  // Thrust (forward along current heading)
   if (isThrusting) {
     let pw = 0.45;
-    let dx = sin(s.pitch) * -sin(s.yaw);
-    let dy = -cos(s.pitch);
-    let dz = sin(s.pitch) * -cos(s.yaw);
-    s.vx += dx * pw; s.vy += dy * pw; s.vz += dz * pw;
+    let dVec = shipUpDir(s);
+    s.vx += dVec.x * pw; s.vy += dVec.y * pw; s.vz += dVec.z * pw;
     if (frameCount % 2 === 0)
       particles.push({
         x: s.x, y: s.y, z: s.z,
-        vx: -dx * 8 + random(-1, 1), vy: -dy * 8 + random(-1, 1), vz: -dz * 8 + random(-1, 1), life: 255
+        vx: -dVec.x * 8 + random(-1, 1), vy: -dVec.y * 8 + random(-1, 1), vz: -dVec.z * 8 + random(-1, 1), life: 255
       });
   }
 
@@ -968,7 +969,7 @@ function drawControlHints(p, pi, hw, h) {
 // === WORLD ===
 // Multi-sine terrain: irrational frequency ratios ensure non-repetition
 function getGridAltitude(tx, tz) {
-  let key = (tx & 0xFFFF) | ((tz & 0xFFFF) << 16);
+  let key = tileKey(tx, tz);
   let cached = altCache.get(key);
   if (cached !== undefined) return cached;
 
@@ -1453,9 +1454,8 @@ function keyPressed() {
 
   // Missile launch (one-shot action, not continuous)
   for (let p of players) {
-    if (keyCode === p.keys.missile && p.missilesRemaining > 0 && !p.dead) {
-      p.missilesRemaining--;
-      p.homingMissiles.push(spawnProjectile(p.ship, 8, 300));
+    if (keyCode === p.keys.missile) {
+      fireMissile(p);
     }
   }
 }
