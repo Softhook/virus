@@ -51,6 +51,7 @@ let infectedTiles = {}, level = 1, currentMaxEnemies = 2;
 let levelComplete = false, infectionStarted = false, levelEndTime = 0;
 let gameFont;
 let gameState = 'menu'; // 'menu' or 'playing'
+let gameStartTime = 0;
 let numPlayers = 1;
 let menuStars = []; // animated starfield for menu
 
@@ -66,9 +67,8 @@ let joyCenter = null;
 let joyPos = null;
 let touchBtns = {
   thrust: { active: false, r: 40, col: [0, 255, 60], label: 'THR' },
-  shoot: { active: false, r: 40, col: [255, 60, 60], label: 'SHT' },
-  brake: { active: false, r: 35, col: [255, 200, 60], label: 'BRK' },
-  missile: { active: false, r: 30, col: [0, 200, 255], label: 'MSL' }
+  shoot: { active: false, r: 50, col: [255, 60, 60], label: 'SHT' },
+  missile: { active: false, r: 35, col: [0, 200, 255], label: 'MSL' }
 };
 
 function checkMobile() {
@@ -181,10 +181,30 @@ function findNearest(arr, x, y, z) {
 }
 
 function spawnProjectile(s, power, life) {
-  let d = shipDir(s);
+  let cp = cos(s.pitch), sp = sin(s.pitch);
+  let cy = cos(s.yaw), sy = sin(s.yaw);
+
+  // Front direction (local 0, 0, -1)
+  let fx = -cp * sy;
+  let fy = sp;
+  let fz = -cp * cy;
+
+  // Nose point with clearance: local (0, 10, -30)
+  let lz = -30, ly = 10;
+  let y1 = ly * cp - lz * sp;
+  let z1 = ly * sp + lz * cp;
+
+  let nx = z1 * sy;
+  let ny = y1;
+  let nz = z1 * cy;
+
   return {
-    x: s.x, y: s.y, z: s.z,
-    vx: d.x * power + s.vx, vy: d.y * power + s.vy, vz: d.z * power + s.vz,
+    x: s.x + nx,
+    y: s.y + ny,
+    z: s.z + nz,
+    vx: fx * power + s.vx,
+    vy: fy * power + s.vy,
+    vz: fz * power + s.vz,
     life
   };
 }
@@ -197,6 +217,7 @@ function preload() {
 function setup() {
   checkMobile();
   createCanvas(windowWidth, windowHeight, WEBGL);
+
   textFont(gameFont);
 
   // Generate trees once (reused across games)
@@ -227,6 +248,7 @@ function setup() {
 
 function startGame(np) {
   numPlayers = np;
+  gameStartTime = millis();
   if (np === 1) {
     players = [createPlayer(0, P1_KEYS, 0, [80, 180, 255])];
   } else {
@@ -493,10 +515,9 @@ function updateMobileInput() {
   if (!isMobile || gameState !== 'playing') return;
 
   let bw = width, bh = height;
-  touchBtns.thrust.x = bw - 80; touchBtns.thrust.y = bh - 170;
+  touchBtns.thrust.x = bw - 190; touchBtns.thrust.y = bh - 70;
   touchBtns.shoot.x = bw - 80; touchBtns.shoot.y = bh - 70;
-  touchBtns.brake.x = bw - 190; touchBtns.brake.y = bh - 70;
-  touchBtns.missile.x = bw - 80; touchBtns.missile.y = bh - 260;
+  touchBtns.missile.x = bw - 80; touchBtns.missile.y = bh - 190;
 
   for (let b in touchBtns) touchBtns[b].active = false;
 
@@ -571,12 +592,11 @@ function updateShipInput(p) {
 
   let isThrusting = keyIsDown(k.thrust);
   let isBraking = keyIsDown(k.brake);
-  let isShooting = keyIsDown(k.shoot) || (numPlayers === 1 && !isMobile && mouseIsPressed && mouseButton === LEFT);
+  let isShooting = keyIsDown(k.shoot) || (numPlayers === 1 && !isMobile && mouseIsPressed && mouseButton === LEFT && millis() - gameStartTime > 300);
 
   if (isMobile && p.id === 0) {
     updateMobileInput();
     if (touchBtns.thrust.active) isThrusting = true;
-    if (touchBtns.brake.active) isBraking = true;
     if (touchBtns.shoot.active) isShooting = true;
 
     if (touchBtns.missile.active && !p.mobileMissilePressed) {
@@ -1446,11 +1466,10 @@ function touchStarted(event) {
   if (gameState === 'menu') {
     if (!fullscreen()) fullscreen(true);
     setTimeout(() => { startGame(1); }, 50);
-    return false;
   } else if (gameState === 'playing' && isMobile) {
     if (!fullscreen()) fullscreen(true);
-    return false;
   }
+  return false;
 }
 
 function touchEnded(event) {
@@ -1466,12 +1485,11 @@ function touchEnded(event) {
       joyPos = null;
     }
   }
+  return false;
 }
 
 function touchMoved(event) {
-  if (isMobile) {
-    return false;
-  }
+  return false;
 }
 
 function mousePressed() {
