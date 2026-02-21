@@ -80,15 +80,25 @@ const isLaunchpad = (x, z) => x >= LAUNCH_MIN && x <= LAUNCH_MAX && z >= LAUNCH_
 const aboveSea = y => y >= SEA - 1;
 
 // Frustum cull: is tile roughly in front of camera?
-function inFrustum(camX, camZ, tx, tz, fwdX, fwdZ) {
-  let dx = tx - camX, dz = tz - camZ;
-  let fwdDist = dx * fwdX + dz * fwdZ;
+function inFrustum(cam, tx, tz) {
+  let dx = tx - cam.x, dz = tz - cam.z;
+  let fwdDist = dx * cam.fwdX + dz * cam.fwdZ;
   if (fwdDist < -TILE * 5) return false;
-  let rightDist = dx * -fwdZ + dz * fwdX;
+  let rightDist = dx * -cam.fwdZ + dz * cam.fwdX;
   let aspect = (numPlayers === 1 ? width : width * 0.5) / height;
   let slope = 0.57735 * aspect + 0.3; // tan(PI/6) * aspect + safe margin
   let halfWidth = (fwdDist > 0 ? fwdDist : 0) * slope + TILE * 6;
   return Math.abs(rightDist) <= halfWidth;
+}
+
+function getCameraParams(s) {
+  let fwdX = -sin(s.yaw), fwdZ = -cos(s.yaw);
+  return {
+    x: s.x - fwdX * 550,
+    z: s.z - fwdZ * 550,
+    fwdX: fwdX,
+    fwdZ: fwdZ
+  };
 }
 
 // Removed distance fog
@@ -703,20 +713,22 @@ const mobileControls = {
   }
 };
 
-// === SHIP INPUT ===
+// === SHIP INPUT & PHYSICS ===
 function updateShipInput(p) {
-  let s = p.ship;
   if (p.dead) return;
+  let { isThrusting, isBraking, isShooting } = gatherShipInput(p);
+  applyShipPhysics(p, p.ship, isThrusting, isBraking, isShooting);
+}
 
+function gatherShipInput(p) {
   let k = p.keys;
-
   let isThrusting = keyIsDown(k.thrust);
   let isBraking = keyIsDown(k.brake);
   let isShooting = keyIsDown(k.shoot) || (numPlayers === 1 && !isMobile && mouseIsPressed && mouseButton === LEFT && millis() - gameStartTime > 300);
 
   if (isMobile && p.id === 0) {
-    if (mobileControls.btns.thrust.active) isThrusting = true;
-    if (mobileControls.btns.shoot.active) isShooting = true;
+    isThrusting = isThrusting || mobileControls.btns.thrust.active;
+    isShooting = isShooting || mobileControls.btns.shoot.active;
 
     if (mobileControls.btns.missile.active && !p.mobileMissilePressed) {
       fireMissile(p);
@@ -728,30 +740,27 @@ function updateShipInput(p) {
     if (mobileControls.joyCenter && mobileControls.joyPos) {
       let dx = mobileControls.joyPos.x - mobileControls.joyCenter.x;
       let dy = mobileControls.joyPos.y - mobileControls.joyCenter.y;
-
-      // Calculate normalized direction vector based on touches
       let distSq = dx * dx + dy * dy;
-      if (distSq > 100) { // Deadzone of 10 pixels squared
-        let dist = sqrt(distSq);
-        let speedFactor = min(1, (dist - 10) / 60);
 
-        s.yaw += -(dx / dist) * YAW_RATE * speedFactor;
-
-        let pitchChange = (dy / dist) * PITCH_RATE * speedFactor * 0.5; // less vertical sensitive
-        s.pitch = constrain(s.pitch - pitchChange, -PI / 2.2, PI / 2.2);
+      if (distSq > 100) { // Deadzone
+        let d = sqrt(distSq);
+        let speedFactor = min(1, (d - 10) / 60);
+        p.ship.yaw -= (dx / d) * YAW_RATE * speedFactor;
+        let pitchChange = (dy / d) * PITCH_RATE * speedFactor * 0.5;
+        p.ship.pitch = constrain(p.ship.pitch - pitchChange, -PI / 2.2, PI / 2.2);
       }
     }
   }
 
-  // Yaw (turn left/right) — use keyIsDown() to avoid stuck-key issues
-  if (keyIsDown(k.left)) s.yaw += YAW_RATE;
-  if (keyIsDown(k.right)) s.yaw -= YAW_RATE;
+  if (keyIsDown(k.left)) p.ship.yaw += YAW_RATE;
+  if (keyIsDown(k.right)) p.ship.yaw -= YAW_RATE;
+  if (keyIsDown(k.pitchUp)) p.ship.pitch = constrain(p.ship.pitch + PITCH_RATE, -PI / 2.2, PI / 2.2);
+  if (keyIsDown(k.pitchDown)) p.ship.pitch = constrain(p.ship.pitch - PITCH_RATE, -PI / 2.2, PI / 2.2);
 
-  // Pitch (tilt up/down)
-  if (keyIsDown(k.pitchUp)) s.pitch = constrain(s.pitch + PITCH_RATE, -PI / 2.2, PI / 2.2);
-  if (keyIsDown(k.pitchDown)) s.pitch = constrain(s.pitch - PITCH_RATE, -PI / 2.2, PI / 2.2);
+  return { isThrusting, isBraking, isShooting };
+}
 
-  // Gravity
+function applyShipPhysics(p, s, isThrusting, isBraking, isShooting) {
   s.vy += GRAV;
 
   if (isThrusting) {
@@ -759,36 +768,32 @@ function updateShipInput(p) {
     let dVec = shipUpDir(s);
     s.vx += dVec.x * pw; s.vy += dVec.y * pw; s.vz += dVec.z * pw;
     if (frameCount % 2 === 0) {
-      let r1 = random(-1, 1), r2 = random(-1, 1), r3 = random(-1, 1);
       particles.push({
         x: s.x, y: s.y, z: s.z,
-        vx: -dVec.x * 8 + r1, vy: -dVec.y * 8 + r2, vz: -dVec.z * 8 + r3, life: 255
+        vx: -dVec.x * 8 + random(-1, 1), vy: -dVec.y * 8 + random(-1, 1), vz: -dVec.z * 8 + random(-1, 1), life: 255
       });
     }
   }
 
-  // Brake / reverse thrust
   if (isBraking) {
     s.vx *= 0.96; s.vy *= 0.96; s.vz *= 0.96;
   }
 
-  // Shoot
-  if (isShooting && frameCount % 6 === 0)
+  if (isShooting && frameCount % 6 === 0) {
     p.bullets.push(spawnProjectile(s, 25, 300));
+  }
 
-  // Damping
   s.vx *= 0.985; s.vy *= 0.985; s.vz *= 0.985;
   s.x += s.vx; s.y += s.vy; s.z += s.vz;
 
-  // Water crash
+  let g = getAltitude(s.x, s.z);
+
   if (s.y > SEA - 12) {
     explosion(s.x, SEA, s.z);
     killPlayer(p);
     return;
   }
 
-  // Ground collision
-  let g = getAltitude(s.x, s.z);
   if (s.y > g - 12) {
     if (s.vy > 2.8) killPlayer(p);
     else { s.y = g - 12; s.vy = 0; s.vx *= 0.8; s.vz *= 0.8; }
@@ -805,66 +810,75 @@ function killPlayer(p) {
 function checkCollisions(p) {
   if (p.dead) return;
   let s = p.ship;
-  let sX = s.x, sY = s.y, sZ = s.z;
 
   // Enemy bullets vs player
   for (let i = enemyBullets.length - 1; i >= 0; i--) {
     let eb = enemyBullets[i];
-    if (dist(eb.x, eb.y, eb.z, sX, sY, sZ) < 70) {
-      explosion(sX, sY, sZ);
+    if (dist(eb.x, eb.y, eb.z, s.x, s.y, s.z) < 70) {
+      explosion(s.x, s.y, s.z);
       killPlayer(p);
       enemyBullets.splice(i, 1);
       return;
     }
   }
 
-  let bLen = p.bullets.length;
-  let eLen = enemies.length;
-  for (let j = eLen - 1; j >= 0; j--) {
-    let e = enemies[j], eX = e.x, eY = e.y, eZ = e.z;
+  // Check all enemies against player projectiles and ship body
+  for (let j = enemies.length - 1; j >= 0; j--) {
+    let e = enemies[j];
     let killed = false;
-    for (let i = bLen - 1; i >= 0; i--) {
+
+    // Player Bullets vs Enemy
+    for (let i = p.bullets.length - 1; i >= 0; i--) {
       let b = p.bullets[i];
-      if (dist(b.x, b.y, b.z, eX, eY, eZ) < 80) {
-        explosion(eX, eY, eZ);
-        enemies.splice(j, 1); p.bullets.splice(i, 1);
-        bLen--;
-        p.score += 100; killed = true; break;
+      if (dist(b.x, b.y, b.z, e.x, e.y, e.z) < 80) {
+        explosion(e.x, e.y, e.z);
+        enemies.splice(j, 1);
+        p.bullets.splice(i, 1);
+        p.score += 100;
+        killed = true;
+        break;
       }
     }
-    if (!killed && dist(sX, sY, sZ, eX, eY, eZ) < 70) {
+
+    // Player Missiles vs Enemy
+    if (!killed) {
+      for (let i = p.homingMissiles.length - 1; i >= 0; i--) {
+        let m = p.homingMissiles[i];
+        if (dist(m.x, m.y, m.z, e.x, e.y, e.z) < 100) {
+          explosion(e.x, e.y, e.z);
+          enemies.splice(j, 1);
+          p.homingMissiles.splice(i, 1);
+          p.score += 250;
+          killed = true;
+          break;
+        }
+      }
+    }
+
+    // Enemy body vs Player body
+    if (!killed && dist(s.x, s.y, s.z, e.x, e.y, e.z) < 70) {
       killPlayer(p);
       return;
     }
   }
 
   // Bullet-tree: only infected trees absorb bullets
-  let tLen = trees.length;
-  let pBullets = p.bullets;
-  let pBlen = pBullets.length;
-  let pScoreAdd = 0;
-  for (let i = pBlen - 1; i >= 0; i--) {
-    let b = pBullets[i];
-    let bX = b.x, bY = b.y, bZ = b.z;
-
-    for (let t = 0; t < tLen; t++) {
-      let tree = trees[t];
-      let tX = tree.x, tZ = tree.z;
-      let ty = getAltitude(tX, tZ);
-      let dxz = dist(bX, bZ, tX, tZ);
-      if (dxz < 60 && bY > ty - tree.trunkH - 30 * tree.canopyScale - 10 && bY < ty + 10) {
-        let tx = toTile(tX), tz = toTile(tZ);
+  for (let i = p.bullets.length - 1; i >= 0; i--) {
+    let b = p.bullets[i];
+    for (let t of trees) {
+      let ty = getAltitude(t.x, t.z);
+      if (dist(b.x, b.z, t.x, t.z) < 60 && b.y > ty - t.trunkH - 30 * t.canopyScale - 10 && b.y < ty + 10) {
+        let tx = toTile(t.x), tz = toTile(t.z);
         if (infectedTiles[tileKey(tx, tz)]) {
           clearInfectionRadius(tx, tz);
-          explosion(tX, ty - tree.trunkH, tZ);
-          pScoreAdd += 200;
-          pBullets.splice(i, 1);
+          explosion(t.x, ty - t.trunkH, t.z);
+          p.score += 200;
+          p.bullets.splice(i, 1);
           break;
         }
       }
     }
   }
-  p.score += pScoreAdd;
 }
 
 
@@ -904,41 +918,54 @@ function updateProjectilePhysics(p) {
   for (let i = p.bullets.length - 1; i >= 0; i--) {
     let b = p.bullets[i];
     b.x += b.vx; b.y += b.vy; b.z += b.vz; b.life -= 2;
-    if (b.life <= 0) p.bullets.splice(i, 1);
-    else if (b.y > getAltitude(b.x, b.z)) { clearInfectionAt(b.x, b.z, p); p.bullets.splice(i, 1); }
+    if (b.life <= 0) {
+      p.bullets.splice(i, 1);
+    } else if (b.y > getAltitude(b.x, b.z)) {
+      clearInfectionAt(b.x, b.z, p);
+      p.bullets.splice(i, 1);
+    }
   }
 
   // Homing missiles
   for (let i = p.homingMissiles.length - 1; i >= 0; i--) {
-    let m = p.homingMissiles[i], maxSpd = 10;
+    let m = p.homingMissiles[i];
+    const maxSpd = 10;
+
     let { target } = findNearest(enemies, m.x, m.y, m.z);
     if (target) {
       let dx = target.x - m.x, dy = target.y - m.y, dz = target.z - m.z;
       let mg = sqrt(dx * dx + dy * dy + dz * dz);
       if (mg > 0) {
         let bl = 0.12;
-        m.vx = lerp(m.vx, dx / mg * maxSpd, bl);
-        m.vy = lerp(m.vy, dy / mg * maxSpd, bl);
-        m.vz = lerp(m.vz, dz / mg * maxSpd, bl);
+        m.vx = lerp(m.vx, (dx / mg) * maxSpd, bl);
+        m.vy = lerp(m.vy, (dy / mg) * maxSpd, bl);
+        m.vz = lerp(m.vz, (dz / mg) * maxSpd, bl);
       }
     }
+
     let sp = sqrt(m.vx * m.vx + m.vy * m.vy + m.vz * m.vz);
-    if (sp > 0) { m.vx = m.vx / sp * maxSpd; m.vy = m.vy / sp * maxSpd; m.vz = m.vz / sp * maxSpd; }
+    if (sp > 0) {
+      m.vx = (m.vx / sp) * maxSpd;
+      m.vy = (m.vy / sp) * maxSpd;
+      m.vz = (m.vz / sp) * maxSpd;
+    }
+
     m.x += m.vx; m.y += m.vy; m.z += m.vz; m.life--;
 
-    if (frameCount % 2 === 0)
-      particles.push({ x: m.x, y: m.y, z: m.z, vx: random(-.5, .5), vy: random(-.5, .5), vz: random(-.5, .5), life: 120 });
-
-    let hit = false;
-    for (let j = enemies.length - 1; j >= 0; j--) {
-      if (dist(m.x, m.y, m.z, enemies[j].x, enemies[j].y, enemies[j].z) < 100) {
-        explosion(enemies[j].x, enemies[j].y, enemies[j].z);
-        enemies.splice(j, 1); p.score += 250; hit = true; break;
-      }
+    if (frameCount % 2 === 0) {
+      particles.push({
+        x: m.x, y: m.y, z: m.z,
+        vx: random(-.5, .5), vy: random(-.5, .5), vz: random(-.5, .5),
+        life: 120
+      });
     }
+
     let gnd = getAltitude(m.x, m.z);
-    if (hit || m.life <= 0 || m.y > gnd) {
-      if (!hit && m.y > gnd) { explosion(m.x, m.y, m.z); clearInfectionAt(m.x, m.z, p); }
+    if (m.life <= 0 || m.y > gnd) {
+      if (m.y > gnd) {
+        explosion(m.x, m.y, m.z);
+        clearInfectionAt(m.x, m.z, p);
+      }
       p.homingMissiles.splice(i, 1);
     }
   }
@@ -1247,8 +1274,7 @@ function drawLandscape(s) {
   noStroke();
 
   let infected = [];
-  let fwdX = -sin(s.yaw), fwdZ = -cos(s.yaw);
-  let camX = s.x - fwdX * 550, camZ = s.z - fwdZ * 550;
+  let cam = getCameraParams(s);
 
   // Disable p5 lighting because it silently overrides custom shaders that don't declare lighting uniforms
   noLights();
@@ -1277,8 +1303,8 @@ function drawLandscape(s) {
       let chunkWorldX = (cx + 0.5) * CHUNK_SIZE * TILE;
       let chunkWorldZ = (cz + 0.5) * CHUNK_SIZE * TILE;
 
-      let dx = chunkWorldX - camX, dz = chunkWorldZ - camZ;
-      let fwdDist = dx * fwdX + dz * fwdZ;
+      let dx = chunkWorldX - cam.x, dz = chunkWorldZ - cam.z;
+      let fwdDist = dx * cam.fwdX + dz * cam.fwdZ;
       // Frustum culling at chunk level roughly
       if (fwdDist < -CHUNK_SIZE * TILE * 1.5) continue;
 
@@ -1291,7 +1317,7 @@ function drawLandscape(s) {
           if (infectedTiles[tileKey(tx, tz)]) {
             let xP = tx * TILE, zP = tz * TILE;
             let cxTile = xP + TILE * 0.5, czTile = zP + TILE * 0.5;
-            let dSq = (camX - cxTile) * (camX - cxTile) + (camZ - czTile) * (camZ - czTile);
+            let dSq = (cam.x - cxTile) * (cam.x - cxTile) + (cam.z - czTile) * (cam.z - czTile);
             let d = Math.sqrt(dSq);
 
             let xP1 = xP + TILE, zP1 = zP + TILE;
@@ -1332,7 +1358,7 @@ function drawLandscape(s) {
   // Solid launchpad base
   push();
   noStroke();
-  let padDepth = (400 - camX) * fwdX + (400 - camZ) * fwdZ;
+  let padDepth = (400 - cam.x) * cam.fwdX + (400 - cam.z) * cam.fwdZ;
   let padCol = getFogColor([80, 80, 75], padDepth);
   fill(padCol[0], padCol[1], padCol[2]);
   let padW = LAUNCH_MAX - LAUNCH_MIN;
@@ -1350,7 +1376,7 @@ function drawLandscape(s) {
   push();
   let mX = LAUNCH_MAX - 100;
   for (let mZ = LAUNCH_MIN + 200; mZ <= LAUNCH_MAX - 200; mZ += 120) {
-    let mDepth = (mX - camX) * fwdX + (mZ - camZ) * fwdZ;
+    let mDepth = (mX - cam.x) * cam.fwdX + (mZ - cam.z) * cam.fwdZ;
     let bCol = getFogColor([60, 60, 60], mDepth);
     let mCol = getFogColor([255, 140, 20], mDepth);
     push();
@@ -1388,14 +1414,14 @@ function getSeaGeometry(seaSize, seaC, sx, sz) {
 function drawTrees(s) {
   let treeCullDist = VIEW_FAR * TILE;
   let cullSq = treeCullDist * treeCullDist;
-  let fwdX = -sin(s.yaw), fwdZ = -cos(s.yaw);
-  let camX = s.x - fwdX * 550, camZ = s.z - fwdZ * 550;
+  let cam = getCameraParams(s);
+
   for (let t of trees) {
     let dx = s.x - t.x, dz = s.z - t.z;
     let dSq = dx * dx + dz * dz;
     if (dSq >= cullSq) continue;
     // Frustum cull trees
-    if (!inFrustum(camX, camZ, t.x, t.z, fwdX, fwdZ)) continue;
+    if (!inFrustum(cam, t.x, t.z)) continue;
     let y = getAltitude(t.x, t.z);
     if (aboveSea(y) || isLaunchpad(t.x, t.z)) continue;
 
@@ -1405,7 +1431,7 @@ function drawTrees(s) {
     let inf = !!infectedTiles[tileKey(toTile(t.x), toTile(t.z))];
 
     // Trunk
-    let depth = (t.x - camX) * fwdX + (t.z - camZ) * fwdZ;
+    let depth = (t.x - cam.x) * cam.fwdX + (t.z - cam.z) * cam.fwdZ;
     let trCol = getFogColor([inf ? 80 : 100, inf ? 40 : 65, inf ? 20 : 25], depth);
     fill(trCol[0], trCol[1], trCol[2]);
     push(); translate(0, -h / 2, 0); box(5, h, 5); pop();
@@ -1442,19 +1468,19 @@ function drawTrees(s) {
 
 function drawBuildings(s) {
   let cullSq = VIEW_FAR * TILE * VIEW_FAR * TILE;
-  let fwdX = -sin(s.yaw), fwdZ = -cos(s.yaw);
-  let camX = s.x - fwdX * 550, camZ = s.z - fwdZ * 550;
+  let cam = getCameraParams(s);
+
   for (let b of buildings) {
     let dx = s.x - b.x, dz = s.z - b.z;
     if (dx * dx + dz * dz >= cullSq) continue;
-    if (!inFrustum(camX, camZ, b.x, b.z, fwdX, fwdZ)) continue;
+    if (!inFrustum(cam, b.x, b.z)) continue;
     let y = getAltitude(b.x, b.z);
     if (aboveSea(y) || isLaunchpad(b.x, b.z)) continue;
 
     let d = sqrt(dx * dx + dz * dz);
     let inf = !!infectedTiles[tileKey(toTile(b.x), toTile(b.z))];
 
-    let depth = (b.x - camX) * fwdX + (b.z - camZ) * fwdZ;
+    let depth = (b.x - cam.x) * cam.fwdX + (b.z - cam.z) * cam.fwdZ;
     push(); translate(b.x, y, b.z); noStroke();
 
     // Lander style buildings
@@ -1545,16 +1571,16 @@ function shipDisplay(s, tintColor) {
   drawShipShadow(s.x, gy, s.z, s.yaw, s.y);
 }
 
-// === ENEMIES ===
 function drawEnemies(s) {
-  let fwdX = -sin(s.yaw), fwdZ = -cos(s.yaw);
-  let camX = s.x - fwdX * 550, camZ = s.z - fwdZ * 550;
+  let cam = getCameraParams(s);
   let cullSq = CULL_DIST * CULL_DIST;
+
   for (let e of enemies) {
     let dx = e.x - s.x, dz = e.z - s.z;
     if (dx * dx + dz * dz > cullSq) continue;
 
-    let depth = (e.x - camX) * fwdX + (e.z - camZ) * fwdZ;
+    let depth = (e.x - cam.x) * cam.fwdX + (e.z - cam.z) * cam.fwdZ;
+
 
     push(); translate(e.x, e.y, e.z);
 
@@ -1604,68 +1630,73 @@ function updateEnemies() {
   let refShip = alivePlayers[0] || players[0].ship;
 
   for (let e of enemies) {
-    if (e.type === 'fighter') {
-      let { target } = findNearest(alivePlayers, e.x, e.y, e.z);
-      let tShip = target || refShip;
+    if (e.type === 'fighter') updateFighter(e, alivePlayers, refShip);
+    else updateSeeder(e, refShip);
+  }
+}
 
-      e.stateTimer = (e.stateTimer || 0) + 1;
-      if (e.stateTimer > 120) {
-        e.stateTimer = 0;
-        e.aggressive = random() > 0.5; // 50% chance to hunt, 50% chance to drift
-        if (!e.aggressive) {
-          e.wanderX = e.x + random(-1500, 1500);
-          e.wanderZ = e.z + random(-1500, 1500);
-        }
-      }
+function updateFighter(e, alivePlayers, refShip) {
+  let { target } = findNearest(alivePlayers, e.x, e.y, e.z);
+  let tShip = target || refShip;
 
-      let tx = e.aggressive ? tShip.x : (e.wanderX || e.x);
-      let tz = e.aggressive ? tShip.z : (e.wanderZ || e.z);
-      let ty = e.aggressive ? tShip.y : -600;
+  e.stateTimer = (e.stateTimer || 0) + 1;
+  if (e.stateTimer > 120) {
+    e.stateTimer = 0;
+    e.aggressive = random() > 0.5; // 50% chance to hunt, 50% chance to drift
+    if (!e.aggressive) {
+      e.wanderX = e.x + random(-1500, 1500);
+      e.wanderZ = e.z + random(-1500, 1500);
+    }
+  }
 
-      let dx = tx - e.x, dy = ty - e.y, dz = tz - e.z;
-      let d = sqrt(dx * dx + dy * dy + dz * dz);
+  let tx = e.aggressive ? tShip.x : (e.wanderX || e.x);
+  let tz = e.aggressive ? tShip.z : (e.wanderZ || e.z);
+  let ty = e.aggressive ? tShip.y : -600;
 
-      let speed = 2.5;
-      if (d > 0) {
-        // smooth steering
-        e.vx = lerp(e.vx || 0, (dx / d) * speed, 0.05);
-        e.vy = lerp(e.vy || 0, (dy / d) * speed, 0.05);
-        e.vz = lerp(e.vz || 0, (dz / d) * speed, 0.05);
-      }
+  let dx = tx - e.x, dy = ty - e.y, dz = tz - e.z;
+  let d = sqrt(dx * dx + dy * dy + dz * dz);
 
-      let gy = getAltitude(e.x, e.z);
-      if (e.y > gy - 150) e.vy -= 0.5; // Steering constraint to avoid crash
+  let speed = 2.5;
+  if (d > 0) {
+    // smooth steering
+    e.vx = lerp(e.vx || 0, (dx / d) * speed, 0.05);
+    e.vy = lerp(e.vy || 0, (dy / d) * speed, 0.05);
+    e.vz = lerp(e.vz || 0, (dz / d) * speed, 0.05);
+  }
 
-      e.x += e.vx; e.y += e.vy; e.z += e.vz;
+  let gy = getAltitude(e.x, e.z);
+  if (e.y > gy - 150) e.vy -= 0.5; // Steering constraint to avoid crash
 
-      e.fireTimer++;
-      if (e.aggressive && d < 1200 && e.fireTimer > 90) {
-        e.fireTimer = 0;
-        // Inaccuracy in shooting
-        let pvx = (dx / d) + random(-0.2, 0.2);
-        let pvy = (dy / d) + random(-0.2, 0.2);
-        let pvz = (dz / d) + random(-0.2, 0.2);
-        let pd = sqrt(pvx * pvx + pvy * pvy + pvz * pvz);
-        enemyBullets.push({
-          x: e.x, y: e.y, z: e.z,
-          vx: (pvx / pd) * 10, vy: (pvy / pd) * 10, vz: (pvz / pd) * 10, life: 120
-        });
-      }
-    } else {
-      e.x += e.vx; e.z += e.vz; e.y += sin(frameCount * 0.05 + e.id) * 2;
-      if (abs(e.x - refShip.x) > 5000) e.vx *= -1;
-      if (abs(e.z - refShip.z) > 5000) e.vz *= -1;
+  e.x += e.vx; e.y += e.vy; e.z += e.vz;
 
-      if (random() < 0.008) {
-        let gy = getAltitude(e.x, e.z);
-        if (!aboveSea(gy)) {
-          let tx = toTile(e.x), tz = toTile(e.z);
-          let wx = tx * TILE, wz = tz * TILE;
-          if (!isLaunchpad(wx, wz)) {
-            let k = tileKey(tx, tz);
-            if (!infectedTiles[k]) bombs.push({ x: e.x, y: e.y, z: e.z, k: k });
-          }
-        }
+  e.fireTimer++;
+  if (e.aggressive && d < 1200 && e.fireTimer > 90) {
+    e.fireTimer = 0;
+    // Inaccuracy in shooting
+    let pvx = (dx / d) + random(-0.2, 0.2);
+    let pvy = (dy / d) + random(-0.2, 0.2);
+    let pvz = (dz / d) + random(-0.2, 0.2);
+    let pd = sqrt(pvx * pvx + pvy * pvy + pvz * pvz);
+    enemyBullets.push({
+      x: e.x, y: e.y, z: e.z,
+      vx: (pvx / pd) * 10, vy: (pvy / pd) * 10, vz: (pvz / pd) * 10, life: 120
+    });
+  }
+}
+
+function updateSeeder(e, refShip) {
+  e.x += e.vx; e.z += e.vz; e.y += sin(frameCount * 0.05 + e.id) * 2;
+  if (abs(e.x - refShip.x) > 5000) e.vx *= -1;
+  if (abs(e.z - refShip.z) > 5000) e.vz *= -1;
+
+  if (random() < 0.008) {
+    let gy = getAltitude(e.x, e.z);
+    if (!aboveSea(gy)) {
+      let tx = toTile(e.x), tz = toTile(e.z);
+      let wx = tx * TILE, wz = tz * TILE;
+      if (!isLaunchpad(wx, wz)) {
+        let k = tileKey(tx, tz);
+        if (!infectedTiles[k]) bombs.push({ x: e.x, y: e.y, z: e.z, k: k });
       }
     }
   }
