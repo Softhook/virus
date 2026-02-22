@@ -1190,22 +1190,26 @@ function getChunkGeometry(cx, cz) {
         }
 
         let baseR, baseG, baseB;
+        let isSkirt = isLaunchpad(xP, zP) || isLaunchpad(xP1, zP) || isLaunchpad(xP, zP1) || isLaunchpad(xP1, zP1);
 
-        let rand = Math.abs(Math.sin(tx * 12.9898 + tz * 78.233)) * 43758.5453 % 1;
-
-        if (avgY > SEA - 15) {
-          let colors = [[230, 210, 80], [200, 180, 60], [150, 180, 50]];
-          let col = colors[Math.floor(rand * 3)];
-          baseR = col[0]; baseG = col[1]; baseB = col[2];
+        if (isSkirt) {
+          baseR = 255; baseG = 255; baseB = 255;
         } else {
-          let colors = [
-            [60, 180, 60], [30, 120, 40], [180, 200, 50],
-            [220, 200, 80], [210, 130, 140], [180, 140, 70]
-          ];
-          let patch = noise(tx * 0.15, tz * 0.15);
-          let colIdx = Math.floor((patch * 2.0 + rand * 0.2) * 6) % 6;
-          let col = colors[colIdx];
-          baseR = col[0]; baseG = col[1]; baseB = col[2];
+          let rand = Math.abs(Math.sin(tx * 12.9898 + tz * 78.233)) * 43758.5453 % 1;
+          if (avgY > SEA - 15) {
+            let colors = [[230, 210, 80], [200, 180, 60], [150, 180, 50]];
+            let col = colors[Math.floor(rand * 3)];
+            baseR = col[0]; baseG = col[1]; baseB = col[2];
+          } else {
+            let colors = [
+              [60, 180, 60], [30, 120, 40], [180, 200, 50],
+              [220, 200, 80], [210, 130, 140], [180, 140, 70]
+            ];
+            let patch = noise(tx * 0.15, tz * 0.15);
+            let colIdx = Math.floor((patch * 2.0 + rand * 0.2) * 6) % 6;
+            let col = colors[colIdx];
+            baseR = col[0]; baseG = col[1]; baseB = col[2];
+          }
         }
 
         let finalR = chk ? baseR : baseR * 0.85;
