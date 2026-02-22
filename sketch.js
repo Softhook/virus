@@ -613,7 +613,7 @@ function spreadInfection() {
     let d = ORTHO_DIRS[floor(random(4))];
     let nx = tx + d[0], nz = tz + d[1], nk = tileKey(nx, nz);
     let wx = nx * TILE, wz = nz * TILE;
-    if (isLaunchpad(wx, wz) || aboveSea(getAltitude(wx, wz)) || infectedTiles[nk]) continue;
+    if (aboveSea(getAltitude(wx, wz)) || infectedTiles[nk]) continue;
     fresh.push(nk);
   }
   let freshLen = fresh.length;
@@ -881,20 +881,18 @@ function updateParticlePhysics() {
     let gy = getAltitude(b.x, b.z);
     if (b.y > gy) {
       explosion(b.x, gy, b.z);
-      if (!isLaunchpad(b.x, b.z)) {
-        if (b.type === 'mega') {
-          let tx = toTile(b.x), tz = toTile(b.z);
-          for (let r = -2; r <= 2; r++) {
-            for (let c = -2; c <= 2; c++) {
-              let nk = tileKey(tx + r, tz + c);
-              infectedTiles[nk] = { tick: frameCount };
-            }
+      if (b.type === 'mega') {
+        let tx = toTile(b.x), tz = toTile(b.z);
+        for (let r = -2; r <= 2; r++) {
+          for (let c = -2; c <= 2; c++) {
+            let nk = tileKey(tx + r, tz + c);
+            infectedTiles[nk] = { tick: frameCount };
           }
-        } else {
-          infectedTiles[b.k] = { tick: frameCount };
         }
-        activePulses = [{ x: b.x, z: b.z, start: millis() / 1000.0 }, ...activePulses].slice(0, 5);
+      } else {
+        infectedTiles[b.k] = { tick: frameCount };
       }
+      activePulses = [{ x: b.x, z: b.z, start: millis() / 1000.0 }, ...activePulses].slice(0, 5);
       bombs.splice(i, 1);
     }
   }
@@ -1185,10 +1183,6 @@ function getChunkGeometry(cx, cz) {
 
         let chk = (tx + tz) % 2 === 0;
 
-        if (xP >= LAUNCH_MIN && xP < LAUNCH_MAX && zP >= LAUNCH_MIN && zP < LAUNCH_MAX) {
-          continue;
-        }
-
         let baseR, baseG, baseB;
         let isSkirt = isLaunchpad(xP, zP) || isLaunchpad(xP1, zP) || isLaunchpad(xP, zP1) || isLaunchpad(xP1, zP1);
 
@@ -1334,32 +1328,6 @@ function drawLandscape(s) {
   resetShader();
   directionalLight(240, 230, 210, 0.5, 0.8, -0.3);
   ambientLight(60, 60, 70);
-
-  // Solid launchpad base
-  push();
-  noStroke();
-  // Draw base as simple quads directly corresponding to tiles (to ensure static mapping free of camera float precision jitter/animation)
-  noLights();
-  beginShape(QUADS);
-  for (let px = LAUNCH_MIN; px < LAUNCH_MAX; px += TILE) {
-    for (let pz = LAUNCH_MIN; pz < LAUNCH_MAX; pz += TILE) {
-      let isChk = ((px / TILE) + (pz / TILE)) % 2 === 0;
-      let col = isChk ? [255, 255, 255] : [220, 220, 220];
-      let cx = px + TILE * 0.5;
-      let cz = pz + TILE * 0.5;
-      let tileDepth = (cx - cam.x) * cam.fwdX + (cz - cam.z) * cam.fwdZ;
-      let fc = getFogColor(col, tileDepth);
-      fill(fc[0], fc[1], fc[2]);
-      vertex(px, LAUNCH_ALT, pz);
-      vertex(px + TILE, LAUNCH_ALT, pz);
-      vertex(px + TILE, LAUNCH_ALT, pz + TILE);
-      vertex(px, LAUNCH_ALT, pz + TILE);
-    }
-  }
-  endShape();
-
-
-  pop();
 
   // Re-enable lighting for 3D structures on top of the pad
   directionalLight(240, 230, 210, 0.5, 0.8, -0.3);
