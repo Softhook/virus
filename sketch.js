@@ -1180,7 +1180,8 @@ function getChunkGeometry(cx, cz) {
         let y00 = getAltitude(xP, zP), y10 = getAltitude(xP1, zP);
         let y01 = getAltitude(xP, zP1), y11 = getAltitude(xP1, zP1);
         let avgY = (y00 + y10 + y01 + y11) * 0.25;
-        if (aboveSea(avgY)) continue;
+        let minY = Math.min(y00, y10, y01, y11);
+        if (aboveSea(minY)) continue;
 
         let chk = (tx + tz) % 2 === 0;
 
