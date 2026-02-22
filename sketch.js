@@ -240,7 +240,11 @@ void main() {
 `;
 
 const TERRAIN_FRAG = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
 precision mediump float;
+#endif
 varying vec4 vColor;
 varying vec4 vWorldPos;
 uniform float uTime;
@@ -254,7 +258,10 @@ void main() {
   for (int i = 0; i < 5; i++) {
     float age = uTime - uPulses[i].z;
     if (age >= 0.0 && age < 3.0) { // Lasts for 3 seconds
-      float distToPulse = length(vWorldPos.xz - uPulses[i].xy);
+      // Scale differences by 0.01 before taking length to avoid fp16 overflow on mobile
+      vec2 diff = (vWorldPos.xz - uPulses[i].xy) * 0.01;
+      float distToPulse = length(diff) * 100.0;
+      
       float radius = age * 800.0; // Expands fast
       float ringThickness = 80.0;
       float ring = smoothstep(radius - ringThickness, radius, distToPulse) * (1.0 - smoothstep(radius, radius + ringThickness, distToPulse));
