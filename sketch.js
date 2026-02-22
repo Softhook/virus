@@ -993,7 +993,34 @@ function renderParticles(camX, camZ) {
       let vb = 255 * (1 - Math.max(Math.min(kb, 4 - kb, 1), 0));
 
       let r, g, b;
-      if (p.color) {
+      let alpha = (lifeNorm < 0.4) ? (lifeNorm / 0.4) * 255 : 255;
+
+      if (p.isExplosion) {
+        let d = Math.hypot(p.x - p.cx, p.y - p.cy, p.z - p.cz);
+        let wave = 1400.0 * Math.pow(t, 0.6); // Expanding shockwave logic
+        let diff = wave - d; // Negative if in front of wave, positive if behind
+
+        if (diff < -50) {
+          // In front of shockwave -> transparent
+          alpha = 0;
+          r = 0; g = 0; b = 0;
+        } else if (diff < 40) {
+          // Leading edge -> white/yellow hot
+          let f = (diff + 50) / 90;
+          r = lerp(255, 255, f); g = lerp(255, 200, f); b = lerp(200, 50, f);
+        } else if (diff < 150) {
+          // Fire band -> orange/red
+          let f = (diff - 40) / 110;
+          r = lerp(255, 200, f); g = lerp(200, 30, f); b = lerp(50, 10, f);
+        } else if (diff < 350) {
+          // Trailing band -> dark red/smoke
+          let f = (diff - 150) / 200;
+          r = lerp(200, 40, f); g = lerp(30, 20, f); b = lerp(10, 20, f);
+        } else {
+          // Lingering smoke in core
+          r = 40; g = 20; b = 20;
+        }
+      } else if (p.color) {
         let f = Math.min(t * 1.5, 1.0);
         r = lerp(p.color[0], 30, f);
         g = lerp(p.color[1], 30, f);
@@ -1011,7 +1038,6 @@ function renderParticles(camX, camZ) {
         }
       }
 
-      let alpha = (lifeNorm < 0.4) ? (lifeNorm / 0.4) * 255 : 255;
 
       push(); translate(p.x, p.y, p.z);
       fill(r, g, b, alpha);
@@ -1830,19 +1856,20 @@ function updateSeeder(e, refShip) {
 
 // === EFFECTS & INPUT ===
 function explosion(x, y, z) {
-  for (let i = 0; i < 80; i++) {
-    let speed = random(2, 25);
+  for (let i = 0; i < 220; i++) {
+    let speed = random(2.0, 32.0);
     let a1 = random(TWO_PI);
     let a2 = random(TWO_PI);
     particles.push({
       x, y, z,
+      cx: x, cy: y, cz: z,
+      isExplosion: true,
       vx: speed * sin(a1) * cos(a2),
       vy: speed * sin(a1) * sin(a2),
       vz: speed * cos(a1),
       life: 255,
-      decay: random(3, 8),
-      seed: random(1.0),
-      size: random(10, 24)
+      decay: random(1.5, 4.5),
+      size: random(3, 9)
     });
   }
 }
